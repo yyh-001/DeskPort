@@ -87,12 +87,18 @@ jobs:
             Local MCP bridge for Windows, macOS and Linux — built-in OAuth 2.1/PKCE,
             workspace allow-listing, 11 file/shell tools and one-click tunnels.
 
-            ### Downloads
+            ### 免安装可执行文件（推荐）
+            - **Windows**：`deskport-*.exe` —— 解压后直接双击运行，无需安装（依赖系统自带 WebView2）
+            - **macOS**：`deskport` 可执行文件 —— `chmod +x` 后运行，首次打开需右键「打开」绕过 Gatekeeper
+            - **Linux**：`deskport` 可执行文件 —— 需系统已装 `webkit2gtk-4.1` 等 Tauri 运行库
+
+            ### 安装包
             - **Windows**: `.msi` (WiX) / `.exe` (NSIS)
             - **macOS**: `.dmg` (Apple Silicon & Intel)
-            - **Linux**: `.AppImage` / `.deb`
+            - **Linux**: `.AppImage` / `.deb` / `.rpm`
 
             See the README for the 30-second Claude / ChatGPT / Cursor setup guide.
           releaseDraft: true
           prerelease: false
+          uploadPlainBinary: true
           args: ${{ matrix.args }}

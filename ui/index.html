@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark light" />
+  <meta name="description" content="DeskPort — 把本机文件夹变成可被 AI 安全访问的 MCP 端口。" />
+  <title>DeskPort</title>
+  <script>
+    (function () {
+      var theme = "dark";
+      try {
+        var saved = localStorage.getItem("deskport.theme");
+        if (saved === "light" || saved === "dark") {
+          theme = saved;
+        } else if (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) {
+          theme = "light";
+        }
+      } catch (e) { /* storage can be unavailable */ }
+      document.documentElement.setAttribute("data-theme", theme);
+    })();
+  </script>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Inline icon sprite: no external fonts, icons or CDNs. -->
+  <svg class="sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-copy" viewBox="0 0 24 24">
+      <rect x="9" y="9" width="12" height="12" rx="2.6" />
+      <path d="M5.6 15H4.8A1.8 1.8 0 0 1 3 13.2V4.8A1.8 1.8 0 0 1 4.8 3h8.4A1.8 1.8 0 0 1 15 4.8v.8" />
+    </symbol>
+    <symbol id="i-check" viewBox="0 0 24 24">
+      <path d="M20 6.5 9.5 17 4 11.5" stroke-width="2.4" />
+    </symbol>
+    <symbol id="i-play" viewBox="0 0 24 24">
+      <path d="M8.2 5.6v12.8L19 12z" fill="currentColor" stroke="none" />
+    </symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24">
+      <rect x="6.8" y="6.8" width="10.4" height="10.4" rx="2.2" fill="currentColor" stroke="none" />
+    </symbol>
+    <symbol id="i-restart" viewBox="0 0 24 24">
+      <path d="M20 12a8 8 0 1 1-2.35-5.65" />
+      <path d="M20 4.5V11h-6.5" />
+    </symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24">
+      <path d="m6 9.5 6 6 6-6" />
+    </symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24">
+      <path d="M3.5 7.6a2 2 0 0 1 2-2h3.9l2.1 2.6h7a2 2 0 0 1 2 2v7.2a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" />
+    </symbol>
+    <symbol id="i-folder-plus" viewBox="0 0 24 24">
+      <path d="M3.5 7.6a2 2 0 0 1 2-2h3.9l2.1 2.6h7a2 2 0 0 1 2 2v7.2a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" />
+      <path d="M12 12.2v4.6M9.7 14.5h4.6" />
+    </symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24">
+      <path d="M4 7h16M9.5 7V5.3A1.3 1.3 0 0 1 10.8 4h2.4a1.3 1.3 0 0 1 1.3 1.3V7" />
+      <path d="M6.6 7l.75 12a1.7 1.7 0 0 0 1.7 1.6h6a1.7 1.7 0 0 0 1.7-1.6L17.5 7" />
+    </symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24">
+      <rect x="4.6" y="10.5" width="14.8" height="9.4" rx="2.2" />
+      <path d="M8 10.5V7.9a4 4 0 0 1 8 0v2.6" />
+      <path d="M12 14.4v1.8" />
+    </symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24">
+      <path d="M12 3.5 5 6.1v5.7c0 4.2 2.9 7.4 7 8.7 4.1-1.3 7-4.5 7-8.7V6.1z" />
+      <path d="m9.2 11.9 2 2 3.7-3.8" />
+    </symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2.5v2M12 19.5v2M4.93 4.93l1.42 1.42M17.65 17.65l1.42 1.42M2.5 12h2M19.5 12h2M4.93 19.07l1.42-1.42M17.65 6.35l1.42-1.42" />
+    </symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24">
+      <path d="M20.4 14.3A8.6 8.6 0 1 1 9.7 3.6a7 7 0 0 0 10.7 10.7z" />
+    </symbol>
+    <symbol id="i-download" viewBox="0 0 24 24">
+      <path d="M12 4v10.6M7.6 10.4 12 14.8l4.4-4.4" />
+      <path d="M4.8 18.6h14.4" />
+    </symbol>
+    <symbol id="i-x" viewBox="0 0 24 24">
+      <path d="M6.2 6.2l11.6 11.6M17.8 6.2 6.2 17.8" />
+    </symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24">
+      <rect x="3" y="4.5" width="18" height="15" rx="2.5" />
+      <path d="m7 9.2 3 2.8-3 2.8M12.8 15h4.2" />
+    </symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M3.6 12h16.8" />
+      <path d="M12 3.5c2.3 2.3 3.4 5.2 3.4 8.5S14.3 18.2 12 20.5C9.7 18.2 8.6 15.3 8.6 12S9.7 5.8 12 3.5z" />
+    </symbol>
+    <symbol id="i-monitor" viewBox="0 0 24 24">
+      <rect x="3" y="4.5" width="18" height="12" rx="2" />
+      <path d="M9 20h6M12 16.5V20" />
+    </symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24">
+      <path d="M12 3.8 21 19.4a1.2 1.2 0 0 1-1 1.8H4a1.2 1.2 0 0 1-1-1.8z" />
+      <path d="M12 9.2v4.6M12 17h.01" />
+    </symbol>
+    <symbol id="i-key" viewBox="0 0 24 24">
+      <circle cx="8.2" cy="15.6" r="3.7" />
+      <path d="m10.9 12.9 7.6-7.6M15.6 5.4 18.2 8M13.2 7.8l2.7 2.7" />
+    </symbol>
+    <symbol id="i-link" viewBox="0 0 24 24">
+      <path d="M9.7 14.3 14.3 9.7" />
+      <path d="M11.2 7.2 13 5.4a3.9 3.9 0 0 1 5.6 5.6l-1.8 1.8" />
+      <path d="M12.8 16.8 11 18.6a3.9 3.9 0 0 1-5.6-5.6l1.8-1.8" />
+    </symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24">
+      <path d="M20 12a8 8 0 1 1-2.35-5.65" />
+      <path d="M20 4.5V11h-6.5" />
+    </symbol>
+    <symbol id="i-arrow-right" viewBox="0 0 24 24">
+      <path d="M5 12h13M13.5 7l4.9 5-4.9 5" />
+    </symbol>
+    <symbol id="i-dot" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="4" fill="currentColor" stroke="none" />
+    </symbol>
+  </svg>
+
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none">
+            <rect x="3.2" y="3.2" width="17.6" height="17.6" rx="5.2" stroke="currentColor" stroke-width="1.6" />
+            <rect x="8.1" y="8.1" width="7.8" height="7.8" rx="2.1" fill="currentColor" />
+          </svg>
+        </span>
+        <span class="brand-name">DeskPort</span>
+        <span class="version" id="versionBadge">v0.1.0</span>
+        <span class="preview-flag" id="previewFlag" hidden>预览</span>
+      </div>
+      <div class="top-actions">
+        <span class="platform-tag" id="platformTag" hidden></span>
+        <button class="icon-btn" id="dataDirBtn" data-action="open-data-dir" title="打开数据目录" aria-label="打开数据目录">
+          <svg class="icon" aria-hidden="true"><use href="#i-folder"></use></svg>
+        </button>
+        <button class="icon-btn" id="themeBtn" data-action="toggle-theme" title="切换到浅色主题" aria-label="切换主题">
+          <svg class="icon" aria-hidden="true"><use href="#i-sun"></use></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="main" id="main">
+      <section class="hero" id="hero" aria-live="polite">
+        <div class="hero-loading">
+          <span class="status-dot starting"></span>
+          <span>正在连接 DeskPort 核心…</span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div class="segmented" role="tablist" aria-label="DeskPort 主导航">
+            <button class="seg active" role="tab" id="tab-workspaces" data-action="switch-tab" data-tab="workspaces" aria-selected="true" aria-controls="panelBody">工作区</button>
+            <button class="seg" role="tab" id="tab-tunnel" data-action="switch-tab" data-tab="tunnel" aria-selected="false" aria-controls="panelBody" tabindex="-1">隧道与接入</button>
+            <button class="seg" role="tab" id="tab-logs" data-action="switch-tab" data-tab="logs" aria-selected="false" aria-controls="panelBody" tabindex="-1">日志与授权</button>
+          </div>
+          <div class="panel-actions" id="panelActions"></div>
+        </div>
+        <div class="panel-body" id="panelBody" role="tabpanel" aria-labelledby="tab-workspaces"></div>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <div class="modal" id="modal" aria-hidden="true">
+    <div class="modal-scrim" data-action="modal-cancel"></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle" aria-describedby="modalBody">
+      <div class="modal-head">
+        <h2 class="modal-title" id="modalTitle"></h2>
+        <button class="icon-btn" data-action="modal-cancel" title="关闭" aria-label="关闭">
+          <svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg>
+        </button>
+      </div>
+      <p class="modal-body" id="modalBody"></p>
+      <div class="modal-actions">
+        <button class="btn btn-sm btn-secondary" data-action="modal-cancel">取消</button>
+        <button class="btn btn-sm btn-danger" id="modalConfirm" data-action="modal-confirm">确认</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js" defer></script>
+</body>
+</html>

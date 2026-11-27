@@ -44,9 +44,8 @@ through **11 file & shell tools** to the AI clients you trust — no Node.js run
 
 ### 从 Release 安装
 
-> `v0.1.0` 的**草稿 Release 已经构建完成**（Windows / macOS 双架构 / Linux，共 9 个产物），
-> 但还没有正式发布 —— 到 [Releases](https://github.com/yyh-001/DeskPort/releases) 页面点
-> 「Publish」即可公开下载。在那之前也可以直接用下面的源码构建。
+> 最新版本 **v0.1.0 已发布**：Windows / macOS（Apple Silicon 与 Intel）/ Linux，共 9 个安装包。
+> 也可以直接用下面的源码构建。
 
 发版后从 [Releases](https://github.com/yyh-001/DeskPort/releases) 下载对应安装包：
 
@@ -166,7 +165,7 @@ MCP 协议与 11 个工具、批量请求、未知方法错误码；隧道日志
 | macOS Intel | `macos-latest` | `x86_64-apple-darwin` |
 | Linux x64 | `ubuntu-22.04` | `.AppImage` + `.deb` |
 
-> **状态**：已用 `workflow_dispatch` 完整跑通一次，四个 job 全绿，产物作为草稿挂在 `v0.1.0`。
+> **状态**：v0.1.0 已通过 `workflow_dispatch` 完整构建并发布（四个 job 全绿）。
 > 之后推 `v*` 标签即可自动发布新版本。
 
 发版流程：

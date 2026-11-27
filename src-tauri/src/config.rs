@@ -352,23 +352,70 @@ pub fn bin_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("bin")
 }
 
-pub fn load_server_config(data_dir: &Path) -> ServerConfig {
-    match fs::read(config_path(data_dir)) {
-        Ok(bytes) => match serde_json::from_slice::<ServerConfig>(&bytes) {
-            Ok(mut cfg) => {
-                cfg.normalize();
-                cfg
+/// Why a JSON file could not be turned into a config value.
+enum JsonLoadError {
+    /// File does not exist yet — first run, not an error worth reporting.
+    NotFound,
+    Io(std::io::Error),
+    Parse(serde_json::Error),
+}
+
+/// Read and parse a JSON config file, tolerating a UTF-8 BOM.
+///
+/// Windows Notepad writes `EF BB BF` when saving as UTF-8, and `serde_json`
+/// rejects that prefix. Stripping it here keeps a hand-edited file working.
+fn read_json_stripping_bom<T: serde::de::DeserializeOwned>(
+    path: &Path,
+) -> std::result::Result<T, JsonLoadError> {
+    const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Err(JsonLoadError::NotFound)
+        }
+        Err(err) => return Err(JsonLoadError::Io(err)),
+    };
+    let body = bytes.strip_prefix(UTF8_BOM).unwrap_or(&bytes);
+    serde_json::from_slice::<T>(body).map_err(JsonLoadError::Parse)
+}
+
+/// One-line warning for a failed load, or `None` when the file is simply absent.
+fn load_warning(file: &str, path: &Path, err: &JsonLoadError) -> Option<String> {
+    match err {
+        JsonLoadError::NotFound => None,
+        JsonLoadError::Io(err) => Some(format!(
+            "Failed to read {file} ({}): {err}. Falling back to defaults.",
+            path.display()
+        )),
+        JsonLoadError::Parse(err) => {
+            let detail = err.to_string().replace(['\n', '\r'], " ");
+            let mut detail: String = detail.chars().take(200).collect();
+            if detail.chars().count() >= 200 {
+                detail.push('…');
             }
-            Err(_) => {
-                let mut cfg = ServerConfig::default();
-                cfg.normalize();
-                cfg
-            }
-        },
-        Err(_) => {
-            let mut cfg = ServerConfig::default();
-            cfg.normalize();
-            cfg
+            Some(format!(
+                "Failed to parse {file} ({}): {detail}. Falling back to defaults — \
+                 check the JSON syntax (a UTF-8 BOM is handled, trailing commas are not).",
+                path.display()
+            ))
+        }
+    }
+}
+
+/// Load `config.json` together with human-readable warnings for the caller to
+/// surface (a missing file is not a warning, a broken one is).
+pub fn load_server_config(data_dir: &Path) -> (ServerConfig, Vec<String>) {
+    let path = config_path(data_dir);
+    match read_json_stripping_bom::<ServerConfig>(&path) {
+        Ok(mut config) => {
+            config.normalize();
+            (config, Vec::new())
+        }
+        Err(err) => {
+            let warnings = load_warning(CONFIG_FILE, &path, &err).into_iter().collect();
+            let mut config = ServerConfig::default();
+            config.normalize();
+            (config, warnings)
         }
     }
 }
@@ -380,13 +427,21 @@ pub fn save_server_config(data_dir: &Path, config: &ServerConfig) -> Result<()> 
     write_atomic(&config_path(data_dir), &bytes, Some(0o600))
 }
 
-pub fn load_tunnel_config(data_dir: &Path) -> TunnelConfig {
-    let mut cfg = fs::read(tunnel_path(data_dir))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<TunnelConfig>(&bytes).ok())
-        .unwrap_or_default();
-    cfg.normalize();
-    cfg
+/// Tunnel counterpart of [`load_server_config`].
+pub fn load_tunnel_config(data_dir: &Path) -> (TunnelConfig, Vec<String>) {
+    let path = tunnel_path(data_dir);
+    match read_json_stripping_bom::<TunnelConfig>(&path) {
+        Ok(mut config) => {
+            config.normalize();
+            (config, Vec::new())
+        }
+        Err(err) => {
+            let warnings = load_warning(TUNNEL_FILE, &path, &err).into_iter().collect();
+            let mut config = TunnelConfig::default();
+            config.normalize();
+            (config, warnings)
+        }
+    }
 }
 
 pub fn save_tunnel_config(data_dir: &Path, config: &TunnelConfig) -> Result<()> {
@@ -510,12 +565,12 @@ mod tests {
     #[test]
     fn missing_and_corrupt_config_fall_back_to_defaults() {
         let dir = temp_dir();
-        let cfg = load_server_config(dir.path());
+        let (cfg, _) = load_server_config(dir.path());
         assert_eq!(cfg.port, 3334);
         assert!(cfg.restrict_to_workspaces);
 
         fs::write(config_path(dir.path()), b"{ not json").unwrap();
-        let cfg = load_server_config(dir.path());
+        let (cfg, _) = load_server_config(dir.path());
         assert_eq!(cfg.port, 3334);
         assert_eq!(cfg.workspaces.len(), 1);
     }
@@ -535,7 +590,7 @@ mod tests {
             ..Default::default()
         };
         save_server_config(dir.path(), &cfg).unwrap();
-        let loaded = load_server_config(dir.path());
+        let (loaded, _) = load_server_config(dir.path());
         assert_eq!(loaded.port, 4123);
         assert_eq!(loaded.default_shell, ShellKind::Zsh);
         assert_eq!(loaded.workspaces[0].id, "docs");
@@ -583,7 +638,7 @@ mod tests {
             ..Default::default()
         };
         save_tunnel_config(dir.path(), &cfg).unwrap();
-        let loaded = load_tunnel_config(dir.path());
+        let (loaded, _) = load_tunnel_config(dir.path());
         assert_eq!(loaded.cloudflare_token, "abc");
         #[cfg(unix)]
         {
@@ -594,5 +649,97 @@ mod tests {
                 .mode();
             assert_eq!(mode & 0o777, 0o600);
         }
+    }
+
+    /// Windows Notepad prepends this when saving as UTF-8.
+    fn with_utf8_bom(json: &str) -> Vec<u8> {
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice(json.as_bytes());
+        bytes
+    }
+
+    #[test]
+    fn bom_config_is_parsed() {
+        let dir = temp_dir();
+        let json = r#"{
+            "port": 4123,
+            "defaultWorkspace": "work",
+            "restrictToWorkspaces": true,
+            "workspaces": [
+                { "id": "work", "name": "Work", "path": "/tmp/work" },
+                { "id": "docs", "name": "Docs", "path": "/tmp/docs" }
+            ],
+            "defaultShell": "bash",
+            "defaultTimeoutSec": 45,
+            "maxOutputChars": 30000
+        }"#;
+        fs::write(config_path(dir.path()), with_utf8_bom(json)).unwrap();
+
+        let (cfg, warnings) = load_server_config(dir.path());
+        assert!(
+            warnings.is_empty(),
+            "BOM must not be reported: {warnings:?}"
+        );
+        assert_eq!(cfg.port, 4123);
+        assert_eq!(cfg.default_workspace, "work");
+        assert_eq!(cfg.default_shell, ShellKind::Bash);
+        assert_eq!(cfg.default_timeout_sec, 45);
+        assert_eq!(cfg.max_output_chars, 30000);
+        assert_eq!(cfg.workspaces.len(), 2);
+        assert_eq!(cfg.workspaces[0].id, "work");
+        assert_eq!(cfg.workspaces[0].name, "Work");
+        assert_eq!(cfg.workspaces[1].id, "docs");
+        assert_eq!(cfg.workspaces[1].path, "/tmp/docs");
+    }
+
+    #[test]
+    fn bom_tunnel_config_is_parsed() {
+        let dir = temp_dir();
+        let json = r#"{
+            "mode": "named",
+            "cloudflareToken": "cf-token",
+            "fixedUrl": "https://mcp.example.com/"
+        }"#;
+        fs::write(tunnel_path(dir.path()), with_utf8_bom(json)).unwrap();
+
+        let (cfg, warnings) = load_tunnel_config(dir.path());
+        assert!(
+            warnings.is_empty(),
+            "BOM must not be reported: {warnings:?}"
+        );
+        assert_eq!(cfg.mode, TunnelMode::Named);
+        assert_eq!(cfg.cloudflare_token, "cf-token");
+        assert_eq!(cfg.fixed_url, "https://mcp.example.com");
+    }
+
+    #[test]
+    fn corrupt_config_falls_back_with_warning() {
+        let dir = temp_dir();
+        fs::write(config_path(dir.path()), b"{ not json").unwrap();
+
+        let (cfg, warnings) = load_server_config(dir.path());
+        assert_eq!(cfg.port, DEFAULT_PORT);
+        assert_eq!(cfg.workspaces.len(), 1);
+        assert_eq!(warnings.len(), 1, "expected exactly one warning");
+        assert!(warnings[0].contains("config.json"), "{}", warnings[0]);
+        assert!(warnings[0].contains("parse"), "{}", warnings[0]);
+    }
+
+    #[test]
+    fn missing_config_reports_no_warning() {
+        let dir = temp_dir();
+        let (cfg, warnings) = load_server_config(dir.path());
+        assert_eq!(cfg.port, DEFAULT_PORT);
+        assert!(
+            warnings.is_empty(),
+            "first run is not an error: {warnings:?}"
+        );
+
+        let (tunnel, warnings) = load_tunnel_config(dir.path());
+        assert_eq!(tunnel.mode, TunnelMode::Quick);
+        assert!(
+            warnings.is_empty(),
+            "first run is not an error: {warnings:?}"
+        );
     }
 }

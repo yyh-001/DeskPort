@@ -83,18 +83,18 @@ impl AppState {
         fs::create_dir_all(config::bin_dir(&data_dir))?;
 
         let config_path = config::config_path(&data_dir);
-        let config = config::load_server_config(&data_dir);
+        let (config, config_warnings) = config::load_server_config(&data_dir);
         if !config_path.exists() {
             config::save_server_config(&data_dir, &config)?;
         }
         let tunnel_path = config::tunnel_path(&data_dir);
-        let tunnel_config = config::load_tunnel_config(&data_dir);
+        let (tunnel_config, tunnel_warnings) = config::load_tunnel_config(&data_dir);
         if !tunnel_path.exists() {
             config::save_tunnel_config(&data_dir, &tunnel_config)?;
         }
         let db = OAuthDb::open(&config::db_path(&data_dir))?;
 
-        Ok(Arc::new(Self {
+        let state = Arc::new(Self {
             data_dir,
             db,
             config: Mutex::new(config.clone()),
@@ -103,7 +103,19 @@ impl AppState {
             tunnel: Mutex::new(TunnelRuntime::new(tunnel_config.mode)),
             installing_cloudflared: AtomicBool::new(false),
             emitter: Mutex::new(None),
-        }))
+        });
+
+        // A config file that exists but cannot be parsed used to fall back to
+        // defaults silently, so edits made in an editor looked ignored. Surface
+        // the reason in the log panel; the frontend shows it on first paint.
+        for warning in config_warnings {
+            state.push_server_log(warning);
+        }
+        for warning in tunnel_warnings {
+            state.push_tunnel_log(warning);
+        }
+
+        Ok(state)
     }
 
     fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -848,5 +860,18 @@ mod tests {
             .expect("snapshot round trip");
         assert_eq!(value["config"]["workspaces"].as_array().unwrap().len(), 1);
         assert_eq!(value["config"]["workspaces"][0]["id"], "default");
+    }
+
+    #[test]
+    fn corrupt_config_warning_reaches_the_log_panel() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(config::config_path(dir.path()), b"{ broken json").unwrap();
+        let state = AppState::open(dir.path()).unwrap();
+        let logs = state.snapshot().server.logs.join("\n");
+        assert!(logs.contains("config.json"), "{logs}");
+        assert!(logs.contains("Failed to parse"), "{logs}");
+        // A broken file is reported, never silently overwritten.
+        let raw = fs::read_to_string(config::config_path(dir.path())).unwrap();
+        assert_eq!(raw, "{ broken json");
     }
 }

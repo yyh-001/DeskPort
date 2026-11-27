@@ -140,11 +140,7 @@ async fn send(
     }
 }
 
-async fn rpc(
-    state: &Arc<AppState>,
-    body: Value,
-    token: Option<&str>,
-) -> HttpResponse {
+async fn rpc(state: &Arc<AppState>, body: Value, token: Option<&str>) -> HttpResponse {
     let owned;
     let mut extra: Vec<(&str, &str)> = Vec::new();
     if let Some(token) = token {
@@ -213,8 +209,8 @@ struct Tokens {
 async fn full_flow(state: &Arc<AppState>) -> Tokens {
     let client_id = register_client(state, "QA Client").await;
     let verifier = "qa-verifier-abcdefghijklmnopqrstuvwxyz-0123456789";
-    let challenge =
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+    let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(Sha256::digest(verifier.as_bytes()));
     let redirect_uri = "http://127.0.0.1:53682/callback";
 
     let approval = send(
@@ -332,7 +328,10 @@ fn qa_path_whitelist_windows_case_and_separator_variants() {
     assert!(err.contains("Access denied"), "{err}");
 
     // Forward slashes and mixed case inside the root are fine.
-    let mixed = format!("{}/Mixed/Case.txt", f.ws.to_string_lossy().replace('\\', "/"));
+    let mixed = format!(
+        "{}/Mixed/Case.txt",
+        f.ws.to_string_lossy().replace('\\', "/")
+    );
     assert!(tools::resolve_path(&cfg, None, &mixed).is_ok(), "{mixed}");
 }
 
@@ -341,11 +340,7 @@ fn qa_tools_path_guard_end_to_end() {
     let f = fixture();
     let cfg = cfg_for(&f);
 
-    let denied = tools::call(
-        &cfg,
-        "read_file",
-        &json!({"filePath": "../outside.txt"}),
-    );
+    let denied = tools::call(&cfg, "read_file", &json!({"filePath": "../outside.txt"}));
     assert!(denied.is_error, "{}", denied.text);
     assert!(denied.text.contains("Access denied"), "{}", denied.text);
 
@@ -370,11 +365,7 @@ fn qa_tools_path_guard_end_to_end() {
         &json!({"filePath": "nested/inside.txt", "content": "inside only"}),
     );
     assert!(!written.is_error, "{}", written.text);
-    let read = tools::call(
-        &cfg,
-        "read_file",
-        &json!({"filePath": "nested/inside.txt"}),
-    );
+    let read = tools::call(&cfg, "read_file", &json!({"filePath": "nested/inside.txt"}));
     assert!(!read.is_error, "{}", read.text);
     assert!(read.text.contains("inside only"));
 }
@@ -469,7 +460,10 @@ async fn qa_oauth_registration_issues_unique_dp_credentials() {
 
     let clients = state.snapshot().oauth;
     assert_eq!(clients.client_count, 2);
-    assert!(clients.clients.iter().all(|c| c.client_id.starts_with("dp_")));
+    assert!(clients
+        .clients
+        .iter()
+        .all(|c| c.client_id.starts_with("dp_")));
 }
 
 #[tokio::test]
@@ -488,7 +482,9 @@ async fn qa_oauth_authorize_page_escapes_xss_payloads() {
         page.headers[header::CONTENT_TYPE].to_str().unwrap(),
         "text/html; charset=utf-8"
     );
-    assert!(page.body.contains("&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;"));
+    assert!(page
+        .body
+        .contains("&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;"));
     assert!(!page.body.contains("<script>alert"));
     assert!(!page.body.contains("<img src=x onerror"));
     assert!(page.body.contains("&lt;b&gt;evil&lt;/b&gt;"));
@@ -550,8 +546,8 @@ async fn qa_oauth_pkce_wrong_verifier_replay_and_refresh() {
     let state = Arc::clone(&f.state);
     let client_id = register_client(&state, "PKCE Client").await;
     let verifier = "qa-verifier-wrong-and-right-check-0123456789";
-    let challenge =
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+    let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(Sha256::digest(verifier.as_bytes()));
     let redirect_uri = "http://127.0.0.1:53682/callback";
 
     let approval = send(
@@ -689,7 +685,12 @@ async fn qa_oauth_revoked_and_expired_tokens_are_rejected() {
     let state = Arc::clone(&f.state);
     let tokens = full_flow(&state).await;
 
-    let ok = rpc(&state, json!({"jsonrpc":"2.0","id":1,"method":"ping"}), Some(&tokens.access)).await;
+    let ok = rpc(
+        &state,
+        json!({"jsonrpc":"2.0","id":1,"method":"ping"}),
+        Some(&tokens.access),
+    )
+    .await;
     assert_eq!(ok.status, StatusCode::OK);
 
     // Revoke just the access token.
@@ -730,7 +731,11 @@ async fn qa_oauth_revoked_and_expired_tokens_are_rejected() {
     )
     .await;
     assert_eq!(expired_response.status, StatusCode::UNAUTHORIZED);
-    assert!(state.db.find_token(expired, "access", config::now_ms()).unwrap().is_none());
+    assert!(state
+        .db
+        .find_token(expired, "access", config::now_ms())
+        .unwrap()
+        .is_none());
 }
 
 // ---------------------------------------------------------------------------
@@ -751,7 +756,10 @@ async fn qa_mcp_requires_bearer_and_returns_www_authenticate() {
         .to_string();
     assert!(challenge.contains("Bearer"), "{challenge}");
     assert!(challenge.contains("resource_metadata="), "{challenge}");
-    assert!(challenge.contains("/.well-known/oauth-protected-resource"), "{challenge}");
+    assert!(
+        challenge.contains("/.well-known/oauth-protected-resource"),
+        "{challenge}"
+    );
 
     let bogus = rpc(&state, body.clone(), Some("bogus-token")).await;
     assert_eq!(bogus.status, StatusCode::UNAUTHORIZED);
@@ -786,7 +794,10 @@ async fn qa_mcp_initialize_notifications_ping_and_exact_tool_list() {
     assert!(result["result"]["capabilities"]["tools"].is_object());
     assert_eq!(result["result"]["serverInfo"]["name"], "DeskPort");
     assert_eq!(result["result"]["serverInfo"]["version"], "0.1.0");
-    assert!(result["result"]["instructions"].as_str().unwrap().contains("list_workspaces"));
+    assert!(result["result"]["instructions"]
+        .as_str()
+        .unwrap()
+        .contains("list_workspaces"));
 
     let notification = rpc(
         &state,
@@ -909,7 +920,11 @@ async fn qa_mcp_tools_call_full_read_write_edit_search_delete_and_bash() {
     let timed_out = call("bash", json!({"command":"sleep 30","timeoutSec":5})).await;
     assert!(started.elapsed() < Duration::from_secs(25));
     assert!(tool_is_error(&timed_out), "{}", timed_out.body);
-    assert!(tool_text(&timed_out).contains("\"timedOut\": true"), "{}", timed_out.body);
+    assert!(
+        tool_text(&timed_out).contains("\"timedOut\": true"),
+        "{}",
+        timed_out.body
+    );
 
     let deleted = call("delete_file", json!({"filePath":"qa/a.txt"})).await;
     assert!(!tool_is_error(&deleted), "{}", deleted.body);
@@ -948,7 +963,10 @@ async fn qa_mcp_batch_unknown_method_and_parse_error() {
         .as_str()
         .unwrap()
         .contains("resources/list"));
-    assert_eq!(responses[2]["result"]["tools"].as_array().unwrap().len(), 11);
+    assert_eq!(
+        responses[2]["result"]["tools"].as_array().unwrap().len(),
+        11
+    );
 
     let invalid = send(
         &state,
@@ -956,9 +974,7 @@ async fn qa_mcp_batch_unknown_method_and_parse_error() {
         "/mcp",
         "application/json",
         "{not valid json",
-        &[
-            (header::AUTHORIZATION.as_str(), "Bearer qa-batch-token"),
-        ],
+        &[(header::AUTHORIZATION.as_str(), "Bearer qa-batch-token")],
     )
     .await;
     assert_eq!(invalid.status, StatusCode::BAD_REQUEST);
@@ -1030,7 +1046,10 @@ fn qa_tunnel_logs_never_contain_plaintext_secrets() {
         .tunnel_config
         .ngrok_auth_token_preview
         .contains(ngrok_token));
-    assert_eq!(snapshot.tunnel_config.cloudflare_token_preview, "cf-super...cdef");
+    assert_eq!(
+        snapshot.tunnel_config.cloudflare_token_preview,
+        "cf-super...cdef"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1040,7 +1059,7 @@ fn qa_tunnel_logs_never_contain_plaintext_secrets() {
 #[test]
 fn qa_missing_config_falls_back_to_safe_defaults() {
     let dir = tempfile::tempdir().unwrap();
-    let cfg = config::load_server_config(dir.path());
+    let (cfg, _) = config::load_server_config(dir.path());
     assert!(cfg.restrict_to_workspaces);
     assert_eq!(cfg.port, 3334);
     assert_eq!(cfg.default_shell, config::ShellKind::Auto);
@@ -1061,12 +1080,12 @@ fn qa_corrupt_config_and_tunnel_files_do_not_crash() {
     fs::write(dir.path().join("tunnel.json"), b"<xml>broken</xml>").unwrap();
     fs::create_dir_all(dir.path().join("bin")).unwrap();
 
-    let cfg = config::load_server_config(dir.path());
+    let (cfg, _) = config::load_server_config(dir.path());
     assert!(cfg.restrict_to_workspaces, "unsafe fallback");
     assert_eq!(cfg.port, 3334);
     assert!(!cfg.workspaces.is_empty());
 
-    let tunnel = config::load_tunnel_config(dir.path());
+    let (tunnel, _) = config::load_tunnel_config(dir.path());
     assert_eq!(tunnel.mode, config::TunnelMode::Quick);
     assert!(tunnel.cloudflare_token.is_empty());
     assert!(tunnel.ngrok_auth_token.is_empty());
@@ -1135,7 +1154,9 @@ fn qa_snapshot_exposes_the_camel_case_frontend_contract() {
     assert!(value["tunnel"]["status"].is_string());
     assert!(value["tunnel"].get("error").is_some());
     assert!(value["tunnelConfig"].get("hasCloudflareToken").is_some());
-    assert!(value["tunnelConfig"].get("cloudflareTokenPreview").is_some());
+    assert!(value["tunnelConfig"]
+        .get("cloudflareTokenPreview")
+        .is_some());
     assert!(value["binaries"].get("cloudflaredInstalled").is_some());
     assert!(value["oauth"].get("activeTokenCount").is_some());
     assert_eq!(value["tools"].as_array().unwrap().len(), 11);

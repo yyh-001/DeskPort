@@ -615,7 +615,7 @@ mod tests {
         ] {
             assert!(object.contains_key(key), "missing {key}");
         }
-        assert_eq!(value["version"], "0.1.0");
+        assert_eq!(value["version"], config::VERSION);
         assert_eq!(value["tools"].as_array().unwrap().len(), 11);
         assert_eq!(value["config"]["restrictToWorkspaces"], true);
         assert_eq!(value["config"]["port"], 3334);

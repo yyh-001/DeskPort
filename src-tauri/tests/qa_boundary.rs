@@ -793,7 +793,7 @@ async fn qa_mcp_initialize_notifications_ping_and_exact_tool_list() {
     assert_eq!(result["result"]["protocolVersion"], "2025-06-18");
     assert!(result["result"]["capabilities"]["tools"].is_object());
     assert_eq!(result["result"]["serverInfo"]["name"], "DeskPort");
-    assert_eq!(result["result"]["serverInfo"]["version"], "0.1.0");
+    assert_eq!(result["result"]["serverInfo"]["version"], config::VERSION);
     assert!(result["result"]["instructions"]
         .as_str()
         .unwrap()

@@ -264,6 +264,38 @@ button {
   white-space: nowrap;
 }
 
+.update-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 18px;
+  padding: 0 7px;
+  border: 1px solid var(--green-border);
+  border-radius: 999px;
+  background: var(--green-soft);
+  color: var(--green);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.14s ease, border-color 0.14s ease, transform 0.08s ease;
+}
+
+.update-pill:hover {
+  border-color: var(--green);
+}
+
+.update-pill:active {
+  transform: scale(0.96);
+}
+
+.update-pill .icon {
+  width: 10px;
+  height: 10px;
+}
+
 .preview-flag {
   display: inline-flex;
   align-items: center;
@@ -337,6 +369,15 @@ button {
   color: var(--red-text);
   background: var(--red-soft);
   border-color: var(--red-border);
+}
+
+.icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.icon-btn.spinning .icon {
+  animation: spin 0.75s linear infinite;
 }
 
 .main {
@@ -729,6 +770,11 @@ html[data-theme="light"] .btn-danger:hover:not(:disabled) {
   background: var(--red-soft);
 }
 
+.notice.update {
+  border-color: var(--green-border);
+  background: var(--green-soft);
+}
+
 .notice-icon {
   display: grid;
   place-items: center;
@@ -743,6 +789,10 @@ html[data-theme="light"] .btn-danger:hover:not(:disabled) {
 
 .notice.danger .notice-icon {
   color: var(--red-text);
+}
+
+.notice.update .notice-icon {
+  color: var(--green);
 }
 
 .notice-icon .icon {
@@ -783,6 +833,29 @@ html[data-theme="light"] .btn-danger:hover:not(:disabled) {
 
 .notice .btn {
   flex: 0 0 auto;
+}
+
+.notice-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+}
+
+.update-progress {
+  margin-top: 5px;
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.update-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--green);
+  transition: width 0.16s ease;
 }
 
 /* meta strip */

@@ -115,6 +115,9 @@
     <symbol id="i-dot" viewBox="0 0 24 24">
       <circle cx="12" cy="12" r="4" fill="currentColor" stroke="none" />
     </symbol>
+    <symbol id="i-arrow-up" viewBox="0 0 24 24">
+      <path d="M12 19V5.5M6.5 11 12 5.5 17.5 11" />
+    </symbol>
   </svg>
 
   <div class="app">
@@ -127,11 +130,15 @@
           </svg>
         </span>
         <span class="brand-name">DeskPort</span>
-        <span class="version" id="versionBadge">v0.1.0</span>
+        <span class="version" id="versionBadge">v0.2.0</span>
+        <button class="update-pill" id="updatePill" data-action="show-update" hidden></button>
         <span class="preview-flag" id="previewFlag" hidden>预览</span>
       </div>
       <div class="top-actions">
         <span class="platform-tag" id="platformTag" hidden></span>
+        <button class="icon-btn" id="checkUpdateBtn" data-action="check-update" title="检查更新" aria-label="检查更新">
+          <svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg>
+        </button>
         <button class="icon-btn" id="dataDirBtn" data-action="open-data-dir" title="打开数据目录" aria-label="打开数据目录">
           <svg class="icon" aria-hidden="true"><use href="#i-folder"></use></svg>
         </button>

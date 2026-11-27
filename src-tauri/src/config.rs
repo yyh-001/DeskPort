@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub const VERSION: &str = "0.1.0";
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub const DEFAULT_PORT: u16 = 3334;
 pub const DEFAULT_TIMEOUT_SEC: u64 = 60;

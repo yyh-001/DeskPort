@@ -50,8 +50,9 @@ through **11 file & shell tools** to the AI clients you trust — no Node.js run
 | 🛡 **路径白名单** | 词法规范化 + `canonicalize` 消解符号链接后再比对，Windows 忽略大小写；`../` 与越界绝对路径直接 `Access denied` |
 | 🐚 **跨平台 Shell** | Windows 自动探测 Git Bash → PowerShell，`CREATE_NO_WINDOW` + 进程树超时清理；macOS/Linux 使用 `$SHELL` 与独立进程组 |
 | 🌐 **隧道** | Cloudflare Quick（零配置）/ Named（Token + 固定域名）/ ngrok；日志自动把 Token 脱敏为 `***` |
-| 🖥 **系统托盘** | 显示窗口、复制 MCP URL、启动/停止全部、退出；关闭窗口仅隐藏 |
+| 🖥 **系统托盘** | 显示窗口、复制 MCP URL、启动/停止全部、检查更新、退出；关闭窗口仅隐藏 |
 | 🎨 **原生授权页** | 与主程序一致的 Linear 风格深浅自适应授权界面，所有动态内容 HTML 转义 |
+| 🔄 **应用内更新** | 自动检测 GitHub Releases 新版本，支持安装版与免安装版进度条一键升级 |
 
 ---
 
@@ -59,7 +60,7 @@ through **11 file & shell tools** to the AI clients you trust — no Node.js run
 
 ### 从 Release 安装
 
-> 最新版本 **v0.1.0 已发布**：Windows / macOS（Apple Silicon 与 Intel）/ Linux，共 9 个安装包。
+> 最新版本 **v0.2.0**：Windows / macOS（Apple Silicon 与 Intel）/ Linux，共 9 个安装包。
 > 也可以直接用下面的源码构建。
 
 发版后从 [Releases](https://github.com/yyh-001/DeskPort/releases) 下载。两种形态都提供：
@@ -153,7 +154,8 @@ DeskPort/
 │  │  ├─ state.rs              运行状态、快照（IPC 契约）
 │  │  ├─ tools.rs              11 个文件 / Shell 工具
 │  │  ├─ mcp_server.rs         MCP Streamable HTTP + OAuth 2.1 端点
-│  │  └─ tunnel.rs             Cloudflare / ngrok 隧道与日志脱敏
+│  │  ├─ tunnel.rs             Cloudflare / ngrok 隧道与日志脱敏
+│  │  └─ updater.rs            GitHub Releases 检查更新与自动升级
 │  ├─ tests/qa_boundary.rs     71 项边界验收（复刻生产模块，不动业务代码）
 │  ├─ icons/                   图标（ico / icns / png）
 │  └─ tauri.conf.json          窗口、打包与标识符
@@ -190,14 +192,13 @@ MCP 协议与 11 个工具、批量请求、未知方法错误码；隧道日志
 | macOS Intel | `macos-latest` | `x86_64-apple-darwin` |
 | Linux x64 | `ubuntu-22.04` | `.AppImage` + `.deb` |
 
-> **状态**：v0.1.0 已通过 `workflow_dispatch` 完整构建并发布（四个 job 全绿）。
-> 之后推 `v*` 标签即可自动发布新版本。
+> **状态**：支持推送 `v*` 标签或手动 `workflow_dispatch` 自动构建并草稿发布四平台产物。
 
 发版流程：
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 ---

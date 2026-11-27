@@ -79,6 +79,16 @@ async fn handle(State(state): State<Arc<AppState>>, request: Request<Body>) -> R
 async fn dispatch(state: Arc<AppState>, request: Request<Body>) -> Resp {
     let method = request.method().clone();
     let path = request.uri().path().to_string();
+    let normalized_path = if path.len() > 1 {
+        let trimmed = path.trim_end_matches('/');
+        if trimmed.is_empty() {
+            "/"
+        } else {
+            trimmed
+        }
+    } else {
+        path.as_str()
+    };
     let query = request.uri().query().unwrap_or("").to_string();
     let base = base_url(request.headers(), state.server_port());
 
@@ -102,7 +112,7 @@ async fn dispatch(state: Arc<AppState>, request: Request<Body>) -> Resp {
         Vec::new()
     };
 
-    match (method.as_str(), path.as_str()) {
+    match (method.as_str(), normalized_path) {
         ("GET", "/") => json_response(
             StatusCode::OK,
             &json!({
@@ -113,37 +123,51 @@ async fn dispatch(state: Arc<AppState>, request: Request<Body>) -> Resp {
             }),
         ),
         ("GET", "/.well-known/oauth-protected-resource")
-        | ("GET", "/.well-known/oauth-protected-resource/mcp") => json_response(
-            StatusCode::OK,
-            &json!({
-                "resource": format!("{base}/mcp"),
-                "resource_name": "DeskPort",
-                "authorization_servers": [base.clone()],
-                "bearer_methods_supported": ["header"],
-                "scopes_supported": [SCOPE],
-            }),
-        ),
-        ("GET", "/.well-known/oauth-authorization-server") => json_response(
-            StatusCode::OK,
-            &json!({
-                "issuer": base,
-                "service_documentation": base,
-                "authorization_endpoint": format!("{base}/oauth/authorize"),
-                "token_endpoint": format!("{base}/oauth/token"),
-                "registration_endpoint": format!("{base}/oauth/register"),
-                "response_types_supported": ["code"],
-                "grant_types_supported": ["authorization_code", "refresh_token"],
-                "code_challenge_methods_supported": ["S256", "plain"],
-                "token_endpoint_auth_methods_supported": ["none", "client_secret_post", "client_secret_basic"],
-                "scopes_supported": [SCOPE],
-            }),
-        ),
+        | ("GET", "/.well-known/oauth-protected-resource/mcp") => {
+            state.push_server_log(format!("OAuth discovery: GET {path}"));
+            json_response(
+                StatusCode::OK,
+                &json!({
+                    "resource": format!("{base}/mcp"),
+                    "resource_name": "DeskPort",
+                    "authorization_servers": [base.clone()],
+                    "bearer_methods_supported": ["header"],
+                    "scopes_supported": [SCOPE],
+                }),
+            )
+        }
+        ("GET", "/.well-known/oauth-authorization-server")
+        | ("GET", "/.well-known/oauth-authorization-server/mcp")
+        | ("GET", "/.well-known/openid-configuration")
+        | ("GET", "/.well-known/openid-configuration/mcp")
+        | ("GET", "/mcp/.well-known/openid-configuration") => {
+            state.push_server_log(format!("OAuth discovery: GET {path}"));
+            json_response(
+                StatusCode::OK,
+                &json!({
+                    "issuer": base,
+                    "service_documentation": base,
+                    "authorization_endpoint": format!("{base}/oauth/authorize"),
+                    "token_endpoint": format!("{base}/oauth/token"),
+                    "registration_endpoint": format!("{base}/oauth/register"),
+                    "response_types_supported": ["code"],
+                    "grant_types_supported": ["authorization_code", "refresh_token"],
+                    "code_challenge_methods_supported": ["S256", "plain"],
+                    "token_endpoint_auth_methods_supported": ["none", "client_secret_post", "client_secret_basic"],
+                    "scopes_supported": [SCOPE],
+                    "client_id_metadata_document_supported": true,
+                }),
+            )
+        }
         ("POST", "/oauth/register") => register_client(&state, &body),
         ("GET", "/oauth/authorize") => authorize_page(&state, &query),
         ("POST", "/oauth/authorize") => authorize_decision(&state, &headers, &body),
         ("POST", "/oauth/token") => issue_token(&state, &headers, &body),
         (_, "/mcp") => mcp_endpoint(&state, &method, &headers, &body, &base),
-        _ => json_error(StatusCode::NOT_FOUND, "not_found", "Unknown endpoint"),
+        _ => {
+            state.push_server_log(format!("HTTP 404: {method} {path}"));
+            json_error(StatusCode::NOT_FOUND, "not_found", "Unknown endpoint")
+        }
     }
 }
 
@@ -235,7 +259,7 @@ fn html_response(status: StatusCode, html: String) -> Resp {
         .header("Referrer-Policy", "no-referrer")
         .header(
             "Content-Security-Policy",
-            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'",
+            "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
         )
         .body(Body::from(html))
         .unwrap_or_else(|_| empty_response(StatusCode::INTERNAL_SERVER_ERROR))
@@ -360,6 +384,14 @@ fn register_client(state: &AppState, body: &[u8]) -> Resp {
         })
         .unwrap_or_default();
 
+    let token_endpoint_auth_method = payload
+        .get("token_endpoint_auth_method")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|method| matches!(*method, "none" | "client_secret_post" | "client_secret_basic"))
+        .unwrap_or("none")
+        .to_string();
+
     let client = ClientRecord {
         client_id: format!("dp_{}", random_hex(12)),
         client_secret: Some(random_hex(24)),
@@ -367,7 +399,7 @@ fn register_client(state: &AppState, body: &[u8]) -> Resp {
         redirect_uris,
         grant_types: vec!["authorization_code".into(), "refresh_token".into()],
         response_types: vec!["code".into()],
-        token_endpoint_auth_method: "none".into(),
+        token_endpoint_auth_method,
         created_at: config::now_ms(),
     };
 
@@ -432,6 +464,8 @@ fn authorize_page(state: &AppState, query: &str) -> Resp {
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| SCOPE.to_string());
 
+    state.push_server_log(format!("OAuth authorize page opened for {client_name}"));
+
     let html = render_authorize_page(&AuthorizePage {
         client_name: &client_name,
         client_id: &client_id,
@@ -471,19 +505,40 @@ fn render_authorize_page(page: &AuthorizePage<'_>) -> String {
         page.workspaces
             .iter()
             .map(|workspace| {
+                let name = escape_html(&workspace.name);
+                let path = escape_html(&workspace.path);
                 format!(
-                    "<li class=\"ws\"><span class=\"ws-name\">{}</span><code class=\"ws-path\">{}</code></li>",
-                    escape_html(&workspace.name),
-                    escape_html(&workspace.path)
+                    "<li class=\"ws\">\
+                       <svg class=\"ws-ico\" viewBox=\"0 0 24 24\" aria-hidden=\"true\">\
+                         <path d=\"M3.5 7.6a2 2 0 0 1 2-2h3.9l2.1 2.6h7a2 2 0 0 1 2 2v7.2a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z\"/>\
+                       </svg>\
+                       <div class=\"ws-info\">\
+                         <span class=\"ws-name\">{name}</span>\
+                         <span class=\"ws-path\" title=\"{path}\">{path}</span>\
+                       </div>\
+                     </li>"
                 )
             })
             .collect::<Vec<_>>()
             .join("")
     };
-    let whitelist = if page.restrict_to_workspaces {
-        "<span class=\"ok\">已开启</span>"
+
+    let whitelist_pill = if page.restrict_to_workspaces {
+        "<span class=\"pill ok\"><i class=\"dot\"></i>白名单已开启</span>"
     } else {
-        "<span class=\"warn-text\">已关闭</span>"
+        "<span class=\"pill warn\"><i class=\"dot\"></i>白名单已关闭</span>"
+    };
+
+    let unrestricted_warn = if page.restrict_to_workspaces {
+        ""
+    } else {
+        "<div class=\"warn-box\">白名单已关闭，该应用可访问本机任意路径</div>"
+    };
+
+    let client_id_display = if page.client_id.is_empty() {
+        "—"
+    } else {
+        page.client_id
     };
 
     format!(
@@ -498,98 +553,182 @@ fn render_authorize_page(page: &AuthorizePage<'_>) -> String {
   :root {{
     color-scheme: dark light;
     --canvas:#09090B; --card:#111113; --surface:#18181B; --inset:#0D0D10;
-    --line:rgba(255,255,255,.075); --fg:#F4F4F5; --fg2:#A1A1AA; --fg3:#71717A;
-    --green:#10B981; --amber:#F59E0B; --red:#EF4444; --primary-bg:#F4F4F5; --primary-fg:#09090B;
-    --shadow:0 24px 80px rgba(0,0,0,.55);
+    --line:rgba(255,255,255,.08); --line-strong:rgba(255,255,255,.14);
+    --fg:#F4F4F5; --fg2:#A1A1AA; --fg3:#71717A;
+    --green:#10B981; --green-soft:rgba(16,185,129,.12); --green-line:rgba(16,185,129,.26);
+    --amber:#F59E0B; --amber-soft:rgba(245,158,11,.10); --amber-line:rgba(245,158,11,.28);
+    --primary-bg:#F4F4F5; --primary-fg:#09090B; --primary-hover:#E4E4E7;
+    --ambient:rgba(255,255,255,.045);
+    --shadow:0 24px 72px rgba(0,0,0,.58);
   }}
   @media (prefers-color-scheme: light) {{
     :root {{
-      --canvas:#FAFAFA; --card:#FFFFFF; --surface:#F4F4F5; --inset:#FAFAFA;
-      --line:rgba(0,0,0,.075); --fg:#18181B; --fg2:#52525B; --fg3:#71717A;
-      --primary-bg:#18181B; --primary-fg:#FAFAFA;
-      --shadow:0 24px 60px rgba(0,0,0,.08);
+      --canvas:#FAFAFA; --card:#FFFFFF; --surface:#F4F4F5; --inset:#F7F7F8;
+      --line:rgba(0,0,0,.075); --line-strong:rgba(0,0,0,.14);
+      --fg:#18181B; --fg2:#52525B; --fg3:#71717A;
+      --green:#059669; --green-soft:rgba(5,150,105,.09); --green-line:rgba(5,150,105,.24);
+      --amber:#B45309; --amber-soft:rgba(180,83,9,.08); --amber-line:rgba(180,83,9,.22);
+      --primary-bg:#18181B; --primary-fg:#FFFFFF; --primary-hover:#27272A;
+      --ambient:rgba(24,24,27,.03);
+      --shadow:0 20px 56px rgba(16,24,40,.10);
     }}
   }}
   * {{ box-sizing:border-box; }}
   body {{
-    margin:0; min-height:100vh; background:var(--canvas); color:var(--fg);
+    margin:0; min-height:100vh; position:relative;
+    background:var(--canvas); color:var(--fg);
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,"PingFang SC","Microsoft YaHei",sans-serif;
-    font-size:14px; line-height:1.55; display:flex; align-items:center; justify-content:center;
-    padding:32px 20px; -webkit-font-smoothing:antialiased;
+    font-size:13.5px; line-height:1.5;
+    display:flex; align-items:center; justify-content:center;
+    padding:24px 16px; -webkit-font-smoothing:antialiased;
+  }}
+  body::before {{
+    content:""; position:fixed; inset:0; pointer-events:none;
+    background:radial-gradient(640px 320px at 50% -120px, var(--ambient), transparent 70%);
   }}
   .card {{
-    width:100%; max-width:472px; background:var(--card); border:1px solid var(--line);
-    border-radius:20px; padding:30px 30px 26px; box-shadow:var(--shadow);
+    position:relative; width:100%; max-width:400px;
+    background:var(--card); border:1px solid var(--line);
+    border-radius:18px; padding:26px 24px 20px; box-shadow:var(--shadow);
   }}
-  .brand {{ display:flex; align-items:center; gap:11px; margin-bottom:24px; }}
-  .wordmark {{ font-size:15px; font-weight:600; letter-spacing:-.01em; }}
-  .wordmark small {{ display:block; font-size:11.5px; font-weight:500; color:var(--fg3); letter-spacing:.02em; }}
-  h1 {{ margin:0 0 8px; font-size:19px; font-weight:600; letter-spacing:-.015em; }}
-  .lede {{ margin:0 0 22px; color:var(--fg2); font-size:13.5px; }}
-  .lede strong {{ color:var(--fg); font-weight:600; }}
-  .rows {{ border:1px solid var(--line); border-radius:12px; overflow:hidden; margin-bottom:18px; }}
-  .row {{ display:flex; gap:14px; padding:10px 14px; background:var(--inset); border-top:1px solid var(--line); }}
-  .row:first-child {{ border-top:0; }}
-  .row .k {{ flex:0 0 88px; color:var(--fg3); font-size:12.5px; }}
-  .row .v {{ flex:1; min-width:0; color:var(--fg); font-size:13px; word-break:break-word; }}
-  .v code {{ font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; color:var(--fg2); }}
-  .ws-list {{ list-style:none; margin:0; padding:0; }}
-  .ws {{ display:flex; flex-direction:column; gap:2px; padding:7px 0; border-top:1px dashed var(--line); }}
-  .ws:first-child {{ border-top:0; padding-top:0; }}
-  .ws:last-child {{ padding-bottom:0; }}
-  .ws-name {{ font-weight:600; font-size:12.5px; }}
-  .ws-path {{ font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:11.5px; color:var(--fg3); word-break:break-all; }}
-  .ws-empty {{ color:var(--fg3); font-size:12.5px; }}
-  .ok {{ color:var(--green); }}
-  .warn-text {{ color:var(--amber); }}
-  .notice {{
-    display:flex; gap:9px; padding:11px 13px; border-radius:10px; margin-bottom:22px;
-    background:rgba(245,158,11,.09);
-    border:1px solid rgba(245,158,11,.32);
-    background:color-mix(in srgb, var(--amber) 9%, transparent);
-    border:1px solid color-mix(in srgb, var(--amber) 32%, transparent);
-    color:var(--fg2); font-size:12.5px;
+  .head {{ text-align:center; margin-bottom:20px; }}
+  .logo {{
+    display:inline-flex; align-items:center; justify-content:center;
+    width:38px; height:38px; border-radius:11px; margin-bottom:10px;
+    background:var(--surface); border:1px solid var(--line-strong);
   }}
-  .notice b {{ color:var(--fg); font-weight:600; }}
-  .actions {{ display:flex; gap:10px; }}
+  .eyebrow {{
+    font-size:11px; font-weight:600; letter-spacing:.04em;
+    color:var(--fg3); margin-bottom:6px;
+  }}
+  h1 {{
+    margin:0 0 6px; font-size:17.5px; font-weight:600;
+    letter-spacing:-.015em; line-height:1.35; word-break:break-word;
+  }}
+  h1 span {{ color:var(--fg); }}
+  .sub {{ margin:0; font-size:12.5px; color:var(--fg2); }}
+  .box {{
+    border:1px solid var(--line); border-radius:12px;
+    background:var(--inset); overflow:hidden; margin-bottom:12px;
+  }}
+  .box-head {{
+    display:flex; align-items:center; justify-content:space-between; gap:8px;
+    padding:9px 12px; border-bottom:1px solid var(--line);
+    font-size:11.5px; font-weight:600; color:var(--fg2);
+  }}
+  .pill {{
+    display:inline-flex; align-items:center; gap:5px;
+    padding:2px 8px; border-radius:999px; font-size:10.5px; font-weight:500;
+  }}
+  .pill .dot {{ width:5px; height:5px; border-radius:50%; background:currentColor; }}
+  .pill.ok {{ color:var(--green); background:var(--green-soft); border:1px solid var(--green-line); }}
+  .pill.warn {{ color:var(--amber); background:var(--amber-soft); border:1px solid var(--amber-line); }}
+  .ws-list {{
+    list-style:none; margin:0; padding:4px 0;
+    max-height:160px; overflow-y:auto;
+  }}
+  .ws {{
+    display:flex; align-items:center; gap:9px;
+    padding:7px 12px;
+  }}
+  .ws + .ws {{ border-top:1px solid var(--line); }}
+  .ws-ico {{
+    width:15px; height:15px; flex:0 0 auto;
+    fill:none; stroke:var(--fg3); stroke-width:1.7;
+    stroke-linecap:round; stroke-linejoin:round;
+  }}
+  .ws-info {{ flex:1; min-width:0; display:flex; flex-direction:column; gap:1px; }}
+  .ws-name {{ font-size:12.5px; font-weight:600; color:var(--fg); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+  .ws-path {{
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:11px; color:var(--fg3);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }}
+  .ws-empty {{ padding:12px; text-align:center; font-size:12px; color:var(--fg3); }}
+  .warn-box {{
+    margin-bottom:12px; padding:8px 11px; border-radius:10px;
+    background:var(--amber-soft); border:1px solid var(--amber-line);
+    color:var(--amber); font-size:11.5px; font-weight:500; text-align:center;
+  }}
+  .details {{
+    margin-bottom:18px; border:1px solid var(--line);
+    border-radius:10px; background:var(--inset);
+  }}
+  .details summary {{
+    list-style:none; cursor:pointer; user-select:none;
+    display:flex; align-items:center; justify-content:space-between;
+    padding:8px 12px; font-size:11.5px; color:var(--fg2); font-weight:500;
+  }}
+  .details summary::-webkit-details-marker {{ display:none; }}
+  .summary-right {{ display:inline-flex; align-items:center; gap:6px; color:var(--fg3); font-size:11px; }}
+  .chev {{
+    width:12px; height:12px; fill:none; stroke:currentColor; stroke-width:1.8;
+    stroke-linecap:round; stroke-linejoin:round; transition:transform .16s ease;
+  }}
+  .details[open] .chev {{ transform:rotate(180deg); }}
+  .details-body {{
+    padding:8px 12px 10px; border-top:1px solid var(--line);
+    display:flex; flex-direction:column; gap:6px;
+  }}
+  .kv {{ display:flex; align-items:baseline; justify-content:space-between; gap:12px; font-size:11.5px; }}
+  .kv span {{ color:var(--fg3); flex:0 0 auto; }}
+  .kv code {{
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:11px; color:var(--fg2); word-break:break-all; text-align:right;
+  }}
+  .actions {{ display:flex; gap:9px; }}
   button {{
-    flex:1; height:38px; border-radius:10px; font-size:13.5px; font-weight:600;
-    cursor:pointer; border:1px solid transparent; transition:opacity .15s ease, transform .05s ease;
-    font-family:inherit;
+    height:40px; border-radius:10px; font-size:13px; font-weight:600;
+    cursor:pointer; border:1px solid transparent; font-family:inherit;
+    transition:background-color .14s ease, border-color .14s ease, transform .06s ease;
   }}
   button:active {{ transform:translateY(1px); }}
-  .approve {{ background:var(--primary-bg); color:var(--primary-fg); }}
-  .approve:hover {{ opacity:.9; }}
-  .deny {{ background:transparent; color:var(--fg2); border-color:var(--line); }}
-  .deny:hover {{ background:var(--surface); color:var(--fg); }}
-  footer {{ margin-top:20px; text-align:center; color:var(--fg3); font-size:11.5px; }}
+  .deny {{
+    flex:0 0 100px; background:transparent; color:var(--fg2); border-color:var(--line);
+  }}
+  .deny:hover {{ background:var(--surface); border-color:var(--line-strong); color:var(--fg); }}
+  .approve {{ flex:1; background:var(--primary-bg); color:var(--primary-fg); }}
+  .approve:hover {{ background:var(--primary-hover); }}
+  footer {{
+    margin-top:16px; text-align:center; color:var(--fg3);
+    font-size:11px; letter-spacing:.01em;
+  }}
 </style>
 </head>
 <body>
   <main class="card">
-    <div class="brand">
-      <svg width="34" height="34" viewBox="0 0 128 128" aria-hidden="true">
-        <rect x="1" y="1" width="126" height="126" rx="29" fill="#111113" stroke="rgba(255,255,255,0.10)"/>
-        <rect x="33" y="33" width="62" height="62" rx="11" fill="none" stroke="#F4F4F5" stroke-width="8"/>
-        <circle cx="64" cy="64" r="10" fill="#10B981"/>
-      </svg>
-      <div class="wordmark">DeskPort<small>本地 MCP 接入授权</small></div>
+    <div class="head">
+      <div class="logo" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+          <rect x="3.2" y="3.2" width="17.6" height="17.6" rx="5.2" stroke="currentColor" stroke-width="1.6"/>
+          <rect x="8.1" y="8.1" width="7.8" height="7.8" rx="2.1" fill="#10B981"/>
+        </svg>
+      </div>
+      <div class="eyebrow">DeskPort</div>
+      <h1>允许 <span>{client_name}</span> 连接？</h1>
+      <p class="sub">授权后可访问开放工作区中的文件与 Shell 工具</p>
     </div>
 
-    <h1>允许此应用连接你的电脑？</h1>
-    <p class="lede">应用 <strong>{client_name}</strong> 请求通过 DeskPort 访问本机文件与 Shell。</p>
-
-    <div class="rows">
-      <div class="row"><div class="k">客户端 ID</div><div class="v"><code>{client_id}</code></div></div>
-      <div class="row"><div class="k">权限范围</div><div class="v"><code>{scope}</code> · 11 个工具</div></div>
-      <div class="row"><div class="k">白名单</div><div class="v">{whitelist}</div></div>
-      <div class="row"><div class="k">开放工作区</div><div class="v"><ul class="ws-list">{workspaces}</ul></div></div>
+    <div class="box">
+      <div class="box-head">
+        <span>开放工作区</span>
+        {whitelist_pill}
+      </div>
+      <ul class="ws-list">{workspaces}</ul>
     </div>
 
-    <div class="notice">
-      <span aria-hidden="true">⚠️</span>
-      <span><b>授权后，该应用可在上述目录中读写文件并执行 Shell 命令。</b> 仅当你认识并信任 <b>{client_name}</b> 时才继续。</span>
-    </div>
+    {unrestricted_warn}
+
+    <details class="details">
+      <summary>
+        <span>连接详情</span>
+        <span class="summary-right">11 个工具 <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9.5 6 6 6-6"/></svg></span>
+      </summary>
+      <div class="details-body">
+        <div class="kv"><span>客户端 ID</span><code>{client_id}</code></div>
+        <div class="kv"><span>权限范围</span><code>{scope}</code></div>
+      </div>
+    </details>
 
     <form method="POST" action="/oauth/authorize" class="actions">
       <input type="hidden" name="client_id" value="{client_id_attr}">
@@ -602,15 +741,16 @@ fn render_authorize_page(page: &AuthorizePage<'_>) -> String {
       <button type="submit" name="decision" value="approve" class="approve">允许连接</button>
     </form>
 
-    <footer>DeskPort v{version} · 仅监听 127.0.0.1，可随时在应用内吊销</footer>
+    <footer>仅授权给信任的应用 · 可随时在 DeskPort 吊销 · v{version}</footer>
   </main>
 </body>
 </html>"##,
         client_name = escape_html(page.client_name),
-        client_id = escape_html(page.client_id),
+        client_id = escape_html(client_id_display),
         scope = escape_html(page.scope),
-        whitelist = whitelist,
+        whitelist_pill = whitelist_pill,
         workspaces = workspaces,
+        unrestricted_warn = unrestricted_warn,
         client_id_attr = escape_html(page.client_id),
         redirect_uri_attr = escape_html(page.redirect_uri),
         state_attr = escape_html(page.state),
@@ -634,8 +774,17 @@ fn authorize_decision(state: &AppState, headers: &HeaderMap, body: &[u8]) -> Res
         Err(err) => return json_error(StatusCode::BAD_REQUEST, "invalid_request", &err),
     };
     let state_param = params.get("state").cloned().unwrap_or_default();
+    let client_id = params.get("client_id").cloned().unwrap_or_default();
 
     if params.get("decision").map(String::as_str) != Some("approve") {
+        state.push_server_log(format!(
+            "OAuth authorization denied for {}",
+            if client_id.is_empty() {
+                "unknown"
+            } else {
+                client_id.as_str()
+            }
+        ));
         {
             let mut pairs = target.query_pairs_mut();
             pairs.append_pair("error", "access_denied");
@@ -646,7 +795,6 @@ fn authorize_decision(state: &AppState, headers: &HeaderMap, body: &[u8]) -> Res
         return redirect_response(target.to_string());
     }
 
-    let client_id = params.get("client_id").cloned().unwrap_or_default();
     let code_challenge = params.get("code_challenge").cloned().unwrap_or_default();
     let code_challenge_method = params
         .get("code_challenge_method")
@@ -658,6 +806,23 @@ fn authorize_decision(state: &AppState, headers: &HeaderMap, body: &[u8]) -> Res
         .cloned()
         .filter(|scope| !scope.trim().is_empty())
         .unwrap_or_else(|| SCOPE.to_string());
+
+    if !client_id.is_empty() && state.db.get_client(&client_id).ok().flatten().is_none() {
+        let client_name = derive_client_name(&client_id);
+        let client = ClientRecord {
+            client_id: client_id.clone(),
+            client_secret: None,
+            client_name,
+            redirect_uris: vec![redirect_uri.clone()],
+            grant_types: vec!["authorization_code".into(), "refresh_token".into()],
+            response_types: vec!["code".into()],
+            token_endpoint_auth_method: "none".into(),
+            created_at: config::now_ms(),
+        };
+        if let Err(err) = state.db.save_client(&client) {
+            state.push_server_log(format!("Failed to record OAuth client {client_id}: {err}"));
+        }
+    }
 
     let code = random_hex(24);
     let record = CodeRecord {
@@ -705,18 +870,113 @@ fn authorize_decision(state: &AppState, headers: &HeaderMap, body: &[u8]) -> Res
 // OAuth: token endpoint
 // ---------------------------------------------------------------------------
 
+fn derive_client_name(client_id: &str) -> String {
+    if let Ok(parsed) = url::Url::parse(client_id) {
+        if matches!(parsed.scheme(), "http" | "https") {
+            if let Some(host) = parsed.host_str() {
+                return host.chars().take(80).collect();
+            }
+        }
+    }
+    client_id.chars().take(80).collect()
+}
+
+fn decode_form_component(raw: &str) -> String {
+    let query = format!("v={raw}");
+    url::form_urlencoded::parse(query.as_bytes())
+        .next()
+        .map(|(_, value)| value.into_owned())
+        .unwrap_or_else(|| raw.to_string())
+}
+
+fn extract_basic_auth(headers: &HeaderMap) -> Option<(String, String)> {
+    let raw = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
+    if raw.len() < 6 || !raw[..6].eq_ignore_ascii_case("basic ") {
+        return None;
+    }
+    let encoded = raw[6..].trim();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .ok()?;
+    let decoded = String::from_utf8(bytes).ok()?;
+    let (id, secret) = decoded.split_once(':')?;
+    Some((decode_form_component(id), decode_form_component(secret)))
+}
+
+fn token_error(state: &AppState, status: StatusCode, error: &str, description: &str) -> Resp {
+    state.push_server_log(format!("OAuth token error ({error}): {description}"));
+    json_error(status, error, description)
+}
+
+fn resolve_client_credentials(
+    headers: &HeaderMap,
+    params: &HashMap<String, String>,
+) -> (String, String) {
+    let basic = extract_basic_auth(headers);
+    let client_id = params
+        .get("client_id")
+        .cloned()
+        .filter(|value| !value.is_empty())
+        .or_else(|| basic.as_ref().map(|(id, _)| id.clone()))
+        .unwrap_or_default();
+    let client_secret = params
+        .get("client_secret")
+        .cloned()
+        .filter(|value| !value.is_empty())
+        .or_else(|| basic.map(|(_, secret)| secret))
+        .unwrap_or_default();
+    (client_id, client_secret)
+}
+
+fn authenticate_client(state: &AppState, client_id: &str, client_secret: &str) -> Result<(), Resp> {
+    if client_id.is_empty() {
+        return Ok(());
+    }
+    let client = match state.db.get_client(client_id) {
+        Ok(Some(client)) => client,
+        Ok(None) => return Ok(()),
+        Err(err) => {
+            state.push_server_log(format!("Failed to read OAuth client: {err}"));
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Database error",
+            ));
+        }
+    };
+
+    if matches!(
+        client.token_endpoint_auth_method.as_str(),
+        "client_secret_basic" | "client_secret_post"
+    ) {
+        let valid = !client_secret.is_empty()
+            && client.client_secret.as_deref() == Some(client_secret);
+        if !valid {
+            return Err(token_error(
+                state,
+                StatusCode::UNAUTHORIZED,
+                "invalid_client",
+                "Client authentication failed",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn issue_token(state: &AppState, headers: &HeaderMap, body: &[u8]) -> Resp {
     let content_type = header_value(headers, "content-type").unwrap_or_default();
     let params = parse_params(&content_type, body);
     match params.get("grant_type").map(String::as_str) {
-        Some("authorization_code") => exchange_code(state, &params),
-        Some("refresh_token") => refresh_token(state, &params),
-        Some(_) => json_error(
+        Some("authorization_code") => exchange_code(state, headers, &params),
+        Some("refresh_token") => refresh_token(state, headers, &params),
+        Some(_) => token_error(
+            state,
             StatusCode::BAD_REQUEST,
             "unsupported_grant_type",
             "Only authorization_code and refresh_token are supported",
         ),
-        None => json_error(
+        None => token_error(
+            state,
             StatusCode::BAD_REQUEST,
             "invalid_request",
             "Missing grant_type",
@@ -724,17 +984,22 @@ fn issue_token(state: &AppState, headers: &HeaderMap, body: &[u8]) -> Resp {
     }
 }
 
-fn exchange_code(state: &AppState, params: &HashMap<String, String>) -> Resp {
+fn exchange_code(state: &AppState, headers: &HeaderMap, params: &HashMap<String, String>) -> Resp {
     let now = config::now_ms();
     let code = params.get("code").cloned().unwrap_or_default();
     let code_verifier = params.get("code_verifier").cloned().unwrap_or_default();
     let redirect_uri = params.get("redirect_uri").cloned().unwrap_or_default();
-    let client_id = params.get("client_id").cloned().unwrap_or_default();
+    let (client_id, client_secret) = resolve_client_credentials(headers, params);
+
+    if let Err(resp) = authenticate_client(state, &client_id, &client_secret) {
+        return resp;
+    }
 
     let record = match state.db.get_code(&code) {
         Ok(Some(record)) => record,
         Ok(None) => {
-            return json_error(
+            return token_error(
+                state,
                 StatusCode::BAD_REQUEST,
                 "invalid_grant",
                 "Invalid or already used authorization code",
@@ -752,21 +1017,24 @@ fn exchange_code(state: &AppState, params: &HashMap<String, String>) -> Resp {
 
     if record.expires_at <= now {
         let _ = state.db.consume_code(&code);
-        return json_error(
+        return token_error(
+            state,
             StatusCode::BAD_REQUEST,
             "invalid_grant",
             "Authorization code expired",
         );
     }
     if !client_id.is_empty() && record.client_id.as_deref() != Some(client_id.as_str()) {
-        return json_error(
+        return token_error(
+            state,
             StatusCode::BAD_REQUEST,
             "invalid_grant",
             "client_id does not match the authorization code",
         );
     }
     if !redirect_uri.is_empty() && record.redirect_uri != redirect_uri {
-        return json_error(
+        return token_error(
+            state,
             StatusCode::BAD_REQUEST,
             "invalid_grant",
             "redirect_uri mismatch",
@@ -777,7 +1045,8 @@ fn exchange_code(state: &AppState, params: &HashMap<String, String>) -> Resp {
         record.code_challenge.as_deref(),
         record.code_challenge_method.as_deref(),
     ) {
-        return json_error(
+        return token_error(
+            state,
             StatusCode::BAD_REQUEST,
             "invalid_grant",
             "PKCE verification failed",
@@ -787,7 +1056,8 @@ fn exchange_code(state: &AppState, params: &HashMap<String, String>) -> Resp {
     match state.db.consume_code(&code) {
         Ok(Some(_)) => {}
         _ => {
-            return json_error(
+            return token_error(
+                state,
                 StatusCode::BAD_REQUEST,
                 "invalid_grant",
                 "Invalid or already used authorization code",
@@ -846,13 +1116,19 @@ fn exchange_code(state: &AppState, params: &HashMap<String, String>) -> Resp {
     )
 }
 
-fn refresh_token(state: &AppState, params: &HashMap<String, String>) -> Resp {
+fn refresh_token(state: &AppState, headers: &HeaderMap, params: &HashMap<String, String>) -> Resp {
     let now = config::now_ms();
+    let (client_id, client_secret) = resolve_client_credentials(headers, params);
+    if let Err(resp) = authenticate_client(state, &client_id, &client_secret) {
+        return resp;
+    }
+
     let refresh = params.get("refresh_token").cloned().unwrap_or_default();
     let record = match state.db.find_token(&refresh, "refresh", now) {
         Ok(Some(record)) => record,
         Ok(None) => {
-            return json_error(
+            return token_error(
+                state,
                 StatusCode::BAD_REQUEST,
                 "invalid_grant",
                 "Invalid or revoked refresh token",
@@ -867,6 +1143,20 @@ fn refresh_token(state: &AppState, params: &HashMap<String, String>) -> Resp {
             );
         }
     };
+
+    if !client_id.is_empty()
+        && record
+            .client_id
+            .as_deref()
+            .is_some_and(|expected| expected != client_id.as_str())
+    {
+        return token_error(
+            state,
+            StatusCode::BAD_REQUEST,
+            "invalid_grant",
+            "client_id does not match the refresh token",
+        );
+    }
 
     let access_token = random_hex(32);
     if let Err(err) = state.db.save_token(&TokenRecord {
@@ -956,13 +1246,24 @@ fn mcp_endpoint(
     };
 
     if !authenticated {
+        let metadata = if token.is_empty() {
+            state.push_server_log(format!("MCP 401 ({method} /mcp): missing bearer token"));
+            format!(
+                "Bearer resource_metadata=\"{base_url}/.well-known/oauth-protected-resource\", scope=\"{SCOPE}\""
+            )
+        } else {
+            state.push_server_log(format!(
+                "MCP 401 ({method} /mcp): invalid or expired bearer token"
+            ));
+            format!(
+                "Bearer error=\"invalid_token\", error_description=\"A valid OAuth 2.1 bearer token is required\", resource_metadata=\"{base_url}/.well-known/oauth-protected-resource\", scope=\"{SCOPE}\""
+            )
+        };
         let mut response = json_error(
             StatusCode::UNAUTHORIZED,
             "invalid_token",
             "A valid OAuth 2.1 bearer token is required",
         );
-        let metadata =
-            format!("Bearer resource_metadata=\"{base_url}/.well-known/oauth-protected-resource\"");
         if let Ok(value) = HeaderValue::from_str(&metadata) {
             response
                 .headers_mut()
@@ -1064,6 +1365,7 @@ fn handle_rpc(state: &AppState, message: &Value) -> Option<Value> {
 
     let result = match method {
         "initialize" => {
+            state.push_server_log("MCP initialize");
             let requested = params
                 .get("protocolVersion")
                 .and_then(Value::as_str)
@@ -1085,7 +1387,10 @@ fn handle_rpc(state: &AppState, message: &Value) -> Option<Value> {
             }))
         }
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({ "tools": tools::schemas() })),
+        "tools/list" => {
+            state.push_server_log("MCP tools/list");
+            Ok(json!({ "tools": tools::schemas() }))
+        }
         "tools/call" => {
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
             let arguments = params
@@ -1097,6 +1402,7 @@ fn handle_rpc(state: &AppState, message: &Value) -> Option<Value> {
             } else if !tools::is_known(name) {
                 Err((-32602, format!("Unknown tool: {name}")))
             } else {
+                state.push_server_log(format!("MCP tools/call {name}"));
                 let config: ServerConfig = state.config();
                 let result = tools::call(&config, name, &arguments);
                 Ok(json!({
@@ -1231,7 +1537,7 @@ mod tests {
         let root = send(&state, "GET", "/", "", "", &[]).await;
         assert_eq!(root.status, StatusCode::OK);
         assert_eq!(root.json()["service"], "DeskPort");
-        assert_eq!(root.json()["version"], "0.1.0");
+        assert_eq!(root.json()["version"], VERSION);
         assert!(root.json()["mcp_endpoint"]
             .as_str()
             .unwrap()
@@ -1765,5 +2071,171 @@ mod tests {
         assert!(validate_redirect_uri("data:text/html,<script>").is_err());
         assert!(validate_redirect_uri("file:///etc/passwd").is_err());
         assert!(validate_redirect_uri("").is_err());
+    }
+
+    #[tokio::test]
+    async fn discovery_aliases_and_trailing_slashes_work() {
+        let (_dir, state) = state();
+        for path in [
+            "/.well-known/openid-configuration",
+            "/.well-known/openid-configuration/mcp",
+            "/.well-known/oauth-authorization-server/mcp",
+            "/mcp/.well-known/openid-configuration",
+        ] {
+            let res = send(&state, "GET", path, "", "", &[]).await;
+            assert_eq!(res.status, StatusCode::OK, "path {path}");
+            let body = res.json();
+            assert_eq!(
+                body["authorization_endpoint"],
+                "http://127.0.0.1:3334/oauth/authorize"
+            );
+            assert_eq!(body["client_id_metadata_document_supported"], true);
+        }
+
+        let token = seed_token(&state);
+        let slash_ping = json_call(
+            &state,
+            "/mcp/",
+            json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}),
+            Some(&token),
+        )
+        .await;
+        assert_eq!(slash_ping.status, StatusCode::OK);
+        assert_eq!(slash_ping.json()["result"], json!({}));
+    }
+
+    #[tokio::test]
+    async fn authorize_page_csp_allows_cross_origin_redirect() {
+        let (_dir, state) = state();
+        let path = "/oauth/authorize?client_id=https%3A%2F%2Fchatgpt.com%2Fconnector&redirect_uri=https%3A%2F%2Fchatgpt.com%2Fconnector_platform_oauth_redirect&state=s1&code_challenge=abc&code_challenge_method=S256";
+        let page = send(&state, "GET", path, "", "", &[]).await;
+        assert_eq!(page.status, StatusCode::OK);
+        let csp = page.headers["content-security-policy"].to_str().unwrap();
+        assert!(!csp.contains("form-action"), "unexpected form-action: {csp}");
+        assert!(csp.contains("default-src 'none'"));
+        assert!(csp.contains("frame-ancestors 'none'"));
+    }
+
+    #[tokio::test]
+    async fn confidential_client_supports_http_basic_auth() {
+        let (_dir, state) = state();
+        let reg = json_call(
+            &state,
+            "/oauth/register",
+            json!({
+                "client_name": "Confidential",
+                "redirect_uris": ["https://chatgpt.com/callback"],
+                "token_endpoint_auth_method": "client_secret_basic"
+            }),
+            None,
+        )
+        .await;
+        assert_eq!(reg.status, StatusCode::CREATED);
+        let reg_json = reg.json();
+        assert_eq!(reg_json["token_endpoint_auth_method"], "client_secret_basic");
+        let client_id = reg_json["client_id"].as_str().unwrap().to_string();
+        let client_secret = reg_json["client_secret"].as_str().unwrap().to_string();
+
+        let verifier = "basic-auth-verifier-0123456789abcdef";
+        let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(Sha256::digest(verifier.as_bytes()));
+        let redirect_uri = "https://chatgpt.com/callback";
+        let form = format!(
+            "decision=approve&client_id={client_id}&redirect_uri={}&state=st&code_challenge={challenge}&code_challenge_method=S256&scope=mcp%3Atools",
+            url::form_urlencoded::byte_serialize(redirect_uri.as_bytes()).collect::<String>()
+        );
+        let approval = send(
+            &state,
+            "POST",
+            "/oauth/authorize",
+            "application/x-www-form-urlencoded",
+            &form,
+            &[],
+        )
+        .await;
+        assert_eq!(approval.status, StatusCode::FOUND);
+        let location = approval.headers[header::LOCATION].to_str().unwrap();
+        let parsed = url::Url::parse(location).unwrap();
+        let code = parsed
+            .query_pairs()
+            .find(|(k, _)| k == "code")
+            .unwrap()
+            .1
+            .into_owned();
+
+        let bad_basic = base64::engine::general_purpose::STANDARD
+            .encode(format!("{client_id}:wrong-secret"));
+        let token_body = format!(
+            "grant_type=authorization_code&code={code}&redirect_uri={}&code_verifier={verifier}",
+            url::form_urlencoded::byte_serialize(redirect_uri.as_bytes()).collect::<String>()
+        );
+        let rejected = send(
+            &state,
+            "POST",
+            "/oauth/token",
+            "application/x-www-form-urlencoded",
+            &token_body,
+            &[("Authorization", &format!("Basic {bad_basic}"))],
+        )
+        .await;
+        assert_eq!(rejected.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(rejected.json()["error"], "invalid_client");
+
+        let good_basic = base64::engine::general_purpose::STANDARD
+            .encode(format!("{client_id}:{client_secret}"));
+        let granted = send(
+            &state,
+            "POST",
+            "/oauth/token",
+            "application/x-www-form-urlencoded",
+            &token_body,
+            &[("Authorization", &format!("Basic {good_basic}"))],
+        )
+        .await;
+        assert_eq!(granted.status, StatusCode::OK, "{}", granted.body);
+        assert!(granted.json()["access_token"].is_string());
+    }
+
+    #[tokio::test]
+    async fn cimd_approval_records_client_and_401_logs_reason() {
+        let (_dir, state) = state();
+        let unauthorized = json_call(
+            &state,
+            "/mcp",
+            json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}),
+            None,
+        )
+        .await;
+        assert_eq!(unauthorized.status, StatusCode::UNAUTHORIZED);
+        let www = unauthorized.headers[header::WWW_AUTHENTICATE]
+            .to_str()
+            .unwrap();
+        assert!(www.contains("scope=\"mcp:tools\""), "{www}");
+        assert!(state
+            .snapshot()
+            .server
+            .logs
+            .iter()
+            .any(|line| line.contains("MCP 401")));
+
+        let cimd_id = "https://chatgpt.com/.well-known/oauth-client.json";
+        let redirect_uri = "https://chatgpt.com/connector_platform_oauth_redirect";
+        let form = format!(
+            "decision=approve&client_id={}&redirect_uri={}&scope=mcp%3Atools",
+            url::form_urlencoded::byte_serialize(cimd_id.as_bytes()).collect::<String>(),
+            url::form_urlencoded::byte_serialize(redirect_uri.as_bytes()).collect::<String>()
+        );
+        let approval = send(
+            &state,
+            "POST",
+            "/oauth/authorize",
+            "application/x-www-form-urlencoded",
+            &form,
+            &[],
+        )
+        .await;
+        assert_eq!(approval.status, StatusCode::FOUND);
+        let saved = state.db.get_client(cimd_id).unwrap().unwrap();
+        assert_eq!(saved.client_name, "chatgpt.com");
     }
 }

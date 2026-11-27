@@ -6,6 +6,7 @@ mod mcp_server;
 mod state;
 mod tools;
 mod tunnel;
+mod updater;
 
 use crate::config::{ServerConfig, TunnelConfigPatch};
 use crate::state::{data_dir_from_app, AppState};
@@ -215,6 +216,34 @@ fn open_data_dir(state: State<'_, Arc<AppState>>) -> Result<(), String> {
         .map_err(|err| format!("Cannot open {}: {err}", dir.display()))
 }
 
+#[tauri::command]
+async fn check_update() -> Result<updater::UpdateCheckResult, String> {
+    tauri::async_runtime::spawn_blocking(updater::check_for_updates)
+        .await
+        .map_err(|err| format!("Update check failed: {err}"))?
+}
+
+#[tauri::command]
+async fn install_update(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+    download_url: String,
+    asset_name: String,
+    install_mode: String,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        updater::install_update(&app, &state, &download_url, &asset_name, &install_mode)
+    })
+    .await
+    .map_err(|err| format!("Update task failed: {err}"))?
+}
+
+#[tauri::command]
+fn open_release_page(url: Option<String>) -> Result<(), String> {
+    updater::open_release_page(url)
+}
+
 // ---------------------------------------------------------------------------
 // Internal lifecycle helpers (shared by IPC commands and the tray menu)
 // ---------------------------------------------------------------------------
@@ -297,6 +326,7 @@ fn setup_tray(app: &mut tauri::App, state: Arc<AppState>) -> tauri::Result<()> {
         .text("show", "显示 DeskPort")
         .text("copy-url", "复制 MCP URL")
         .text("toggle", "启动 / 停止全部")
+        .text("check-update", "检查更新")
         .separator()
         .text("quit", "退出 DeskPort")
         .build()?;
@@ -324,6 +354,10 @@ fn setup_tray(app: &mut tauri::App, state: Arc<AppState>) -> tauri::Result<()> {
                 } else {
                     start_all_inner(&menu_state);
                 }
+            }
+            "check-update" => {
+                show_main_window(app);
+                let _ = app.emit("trigger-check-update", ());
             }
             "quit" => {
                 tunnel::stop(&menu_state);
@@ -397,6 +431,9 @@ pub fn run() {
             pick_folder,
             install_cloudflared,
             open_data_dir,
+            check_update,
+            install_update,
+            open_release_page,
         ]);
 
     let app = builder

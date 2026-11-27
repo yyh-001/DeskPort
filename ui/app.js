@@ -43,7 +43,10 @@
     "revoke_token",
     "pick_folder",
     "install_cloudflared",
-    "open_data_dir"
+    "open_data_dir",
+    "check_update",
+    "install_update",
+    "open_release_page"
   ];
   var IPC_ALLOWED = new Set(IPC_COMMANDS);
 
@@ -109,7 +112,7 @@
   function createMockState() {
     var now = Date.now();
     return {
-      version: "0.1.0",
+      version: "0.2.0",
       platform: "windows",
       dataDir: "C:\\Users\\you\\AppData\\Roaming\\io.github.yyh001.deskport",
       tools: TOOL_NAMES.slice(),
@@ -147,7 +150,7 @@
         startedAt: now - 7 * 60 * 1000,
         localUrl: "http://127.0.0.1:3334/mcp",
         logs: [
-          "[09:41:02] DeskPort 0.1.0 启动",
+          "[09:41:02] DeskPort 0.2.0 启动",
           "[09:41:02] data dir: C:\\Users\\you\\AppData\\Roaming\\io.github.yyh001.deskport",
           "[09:41:03] listening on http://127.0.0.1:3334",
           "[09:41:03] MCP endpoint ready: /mcp",
@@ -230,6 +233,14 @@
     picking: false,
     installing: false,
     installError: "",
+    update: {
+      checking: false,
+      installing: false,
+      info: null,
+      progress: null,
+      error: "",
+      dismissed: false
+    },
     preview: false,
     draft: {
       mode: "quick",
@@ -254,6 +265,8 @@
     panelActions: document.getElementById("panelActions"),
     panelBody: document.getElementById("panelBody"),
     versionBadge: document.getElementById("versionBadge"),
+    updatePill: document.getElementById("updatePill"),
+    checkUpdateBtn: document.getElementById("checkUpdateBtn"),
     platformTag: document.getElementById("platformTag"),
     dataDirBtn: document.getElementById("dataDirBtn"),
     themeBtn: document.getElementById("themeBtn"),
@@ -693,16 +706,41 @@
   /* ---------------------------------------------------------------- render: header */
   function renderHeader() {
     var snapshot = ui.snapshot;
-    if (!snapshot) return;
-    var sig = JSON.stringify([snapshot.version, snapshot.platform, snapshot.dataDir, ui.preview]);
+    var updateInfo = ui.update.info;
+    var hasUpdate = Boolean(updateInfo && updateInfo.hasUpdate);
+    var latestVersion = updateInfo ? updateInfo.latestVersion : "";
+    var sig = JSON.stringify([
+      snapshot && snapshot.version,
+      snapshot && snapshot.platform,
+      snapshot && snapshot.dataDir,
+      ui.preview,
+      ui.update.checking,
+      ui.update.installing,
+      hasUpdate,
+      latestVersion
+    ]);
     if (sig === ui.headerSig) return;
     ui.headerSig = sig;
-    els.versionBadge.textContent = "v" + (snapshot.version || "0.1.0");
-    var platform = platformLabel(snapshot.platform);
-    els.platformTag.textContent = platform;
-    els.platformTag.hidden = !platform;
-    els.dataDirBtn.title = snapshot.dataDir ? "打开数据目录\n" + snapshot.dataDir : "打开数据目录";
+    if (snapshot) {
+      els.versionBadge.textContent = "v" + (snapshot.version || "0.2.0");
+      var platform = platformLabel(snapshot.platform);
+      els.platformTag.textContent = platform;
+      els.platformTag.hidden = !platform;
+      els.dataDirBtn.title = snapshot.dataDir ? "打开数据目录\n" + snapshot.dataDir : "打开数据目录";
+    }
     els.previewFlag.hidden = !ui.preview;
+    if (els.checkUpdateBtn) {
+      els.checkUpdateBtn.disabled = ui.update.checking || ui.update.installing;
+      els.checkUpdateBtn.classList.toggle("spinning", ui.update.checking);
+      els.checkUpdateBtn.title = ui.update.checking ? "正在检查更新…" : "检查更新";
+    }
+    if (els.updatePill) {
+      els.updatePill.hidden = !hasUpdate;
+      if (hasUpdate) {
+        els.updatePill.innerHTML = icon("arrow-up") + "<span>v" + esc(latestVersion) + "</span>";
+        els.updatePill.title = "发现新版本 v" + latestVersion + "，点击查看";
+      }
+    }
   }
 
   /* ---------------------------------------------------------------- render: hero */
@@ -852,6 +890,103 @@
     );
   }
 
+  function formatBytes(bytes) {
+    if (!bytes || bytes <= 0) return "";
+    if (bytes < 1024 * 1024) return Math.round(bytes / 1024) + " KB";
+    return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+  }
+
+  function summarizeReleaseNotes(notes) {
+    var lines = String(notes || "")
+      .split(/\r?\n/)
+      .map(function (line) {
+        return line.replace(/^#+\s*/, "").replace(/^[-*]\s*/, "").trim();
+      })
+      .filter(Boolean);
+    if (!lines.length) return "有新版本可用，建议更新以获取最新修复与功能。";
+    var first = lines[0];
+    return first.length > 90 ? first.slice(0, 89) + "…" : first;
+  }
+
+  function updateNotice() {
+    var info = ui.update.info;
+    if (!info || !info.hasUpdate || ui.update.dismissed) return "";
+    var installing = ui.update.installing;
+    var progress = ui.update.progress;
+    var canDirectInstall = Boolean(info.downloadUrl && info.assetName && info.installMode !== "manual");
+    var sizeText = info.assetSize ? " · " + formatBytes(info.assetSize) : "";
+    var descHtml = "";
+    if (installing && progress) {
+      var pct = typeof progress.percent === "number" ? progress.percent : null;
+      var downloadedText = progress.downloaded ? formatBytes(progress.downloaded) : "";
+      var totalText = progress.total ? formatBytes(progress.total) : "";
+      var detail =
+        (progress.message || "正在更新…") +
+        (pct !== null ? " " + pct + "%" : "") +
+        (downloadedText && totalText ? " (" + downloadedText + " / " + totalText + ")" : "");
+      descHtml =
+        '<p class="notice-desc">' +
+        esc(detail) +
+        "</p>" +
+        '<div class="update-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' +
+        (pct !== null ? pct : 0) +
+        '"><div class="update-progress-fill" style="width:' +
+        (pct !== null ? pct : 35) +
+        '%"></div></div>';
+    } else if (ui.update.error) {
+      descHtml = '<p class="notice-desc error">' + esc(ui.update.error) + "</p>";
+    } else {
+      descHtml =
+        '<p class="notice-desc">' +
+        esc(summarizeReleaseNotes(info.releaseNotes) + sizeText) +
+        "</p>";
+    }
+
+    var primaryBtn = "";
+    if (canDirectInstall) {
+      primaryBtn = installing
+        ? '<button class="btn btn-sm btn-primary" disabled><span class="spinner"></span><span>更新中…</span></button>'
+        : '<button class="btn btn-sm btn-primary" data-action="install-update"' +
+          (ui.busy ? " disabled" : "") +
+          ">" +
+          icon("download") +
+          "<span>立即更新</span></button>";
+    } else {
+      primaryBtn =
+        '<button class="btn btn-sm btn-primary" data-action="open-release-page">' +
+        icon("arrow-right") +
+        "<span>前往下载</span></button>";
+    }
+
+    var detailsBtn = installing
+      ? ""
+      : '<button class="btn btn-sm btn-ghost" data-action="open-release-page">查看详情</button>';
+    var dismissBtn = installing
+      ? ""
+      : '<button class="icon-btn" data-action="dismiss-update" title="暂时忽略" aria-label="暂时忽略">' +
+        icon("x") +
+        "</button>";
+
+    return (
+      '<div class="notice update">' +
+      '<span class="notice-icon">' +
+      icon("arrow-up") +
+      "</span>" +
+      '<div class="notice-body">' +
+      '<p class="notice-title">发现新版本 v' +
+      esc(info.latestVersion) +
+      "</p>" +
+      descHtml +
+      "</div>" +
+      '<div class="notice-actions">' +
+      primaryBtn +
+      detailsBtn +
+      dismissBtn +
+      "</div>" +
+      "</div>"
+    );
+  }
+
   function heroSignature(snapshot) {
     if (!snapshot) {
       return "empty|" + String(ui.loading) + "|" + String(ui.loadError || "");
@@ -878,6 +1013,14 @@
       ngrokInstalled: (snapshot.binaries || {}).ngrokInstalled,
       installing: Boolean((snapshot.binaries || {}).installingCloudflared) || ui.installing,
       installError: ui.installError,
+      updateChecking: ui.update.checking,
+      updateInstalling: ui.update.installing,
+      updateDismissed: ui.update.dismissed,
+      updateError: ui.update.error,
+      updateVersion: ui.update.info && ui.update.info.hasUpdate ? ui.update.info.latestVersion : "",
+      updatePercent: ui.update.progress ? ui.update.progress.percent : null,
+      updateDownloaded: ui.update.progress ? ui.update.progress.downloaded : 0,
+      updateStage: ui.update.progress ? ui.update.progress.stage : "",
       toolsCount: (snapshot.tools || []).length,
       toolsOpen: ui.toolsOpen,
       busy: ui.busy
@@ -990,6 +1133,7 @@
       icon("copy") +
       "<span>复制</span></button>" +
       "</div>" +
+      updateNotice() +
       cloudflaredNotice(snapshot) +
       tunnelErrorNotice(snapshot) +
       '<div class="meta">' +
@@ -2058,6 +2202,90 @@
     showToast("已放弃运行参数更改");
   }
 
+  async function checkForUpdates(silent) {
+    if (!IS_TAURI) {
+      if (!silent) showToast("浏览器预览模式 · 请在 DeskPort 桌面端检查更新");
+      return;
+    }
+    if (ui.update.checking || ui.update.installing) return;
+    ui.update.checking = true;
+    renderHeader();
+    try {
+      var info = await ipc("check_update", {});
+      ui.update.info = info;
+      ui.update.error = "";
+      if (info && info.hasUpdate) {
+        ui.update.dismissed = false;
+        if (!silent) showToast("发现新版本 v" + info.latestVersion, "success");
+      } else if (!silent) {
+        showToast("当前已是最新版本 v" + ((info && info.currentVersion) || "0.2.0"), "success");
+      }
+    } catch (err) {
+      var msg = errorMessage(err);
+      ui.update.error = msg;
+      if (!silent) showToast("检查更新失败：" + msg, "error");
+    } finally {
+      ui.update.checking = false;
+      renderHeader();
+      renderHero(true);
+    }
+  }
+
+  async function installUpdate() {
+    if (!ensureInteractive()) return;
+    var info = ui.update.info;
+    if (ui.update.installing || !info || !info.downloadUrl || !info.assetName) return;
+    ui.update.installing = true;
+    ui.update.error = "";
+    ui.update.progress = {
+      stage: "downloading",
+      downloaded: 0,
+      total: info.assetSize || null,
+      percent: 0,
+      message: "正在准备下载…"
+    };
+    renderHeader();
+    renderHero(true);
+    try {
+      await ipc("install_update", {
+        downloadUrl: info.downloadUrl,
+        assetName: info.assetName,
+        installMode: info.installMode || "manual"
+      });
+    } catch (err) {
+      ui.update.error = errorMessage(err);
+      showToast("更新失败：" + ui.update.error, "error");
+    } finally {
+      ui.update.installing = false;
+      renderHeader();
+      renderHero(true);
+    }
+  }
+
+  async function openReleasePage() {
+    if (!ensureInteractive()) return;
+    try {
+      var url = ui.update.info && ui.update.info.releaseUrl ? ui.update.info.releaseUrl : null;
+      await ipc("open_release_page", { url: url });
+    } catch (err) {
+      showToast("无法打开发布页：" + errorMessage(err), "error");
+    }
+  }
+
+  function showUpdateBanner() {
+    ui.update.dismissed = false;
+    renderHero(true);
+    var mainEl = document.getElementById("main");
+    if (mainEl && typeof mainEl.scrollTo === "function") {
+      mainEl.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }
+
+  function dismissUpdateBanner() {
+    ui.update.dismissed = true;
+    renderHero(true);
+  }
+
   async function installCloudflared() {
     if (!ensureInteractive()) return;
     if (ui.installing || ui.busy) return;
@@ -2178,6 +2406,21 @@
         break;
       case "open-data-dir":
         openDataDir();
+        break;
+      case "check-update":
+        checkForUpdates(false);
+        break;
+      case "show-update":
+        showUpdateBanner();
+        break;
+      case "install-update":
+        installUpdate();
+        break;
+      case "open-release-page":
+        openReleasePage();
+        break;
+      case "dismiss-update":
+        dismissUpdateBanner();
         break;
       case "retry-load":
         retryLoad();
@@ -2369,6 +2612,15 @@
         if (ui.busy || ui.picking || ui.installing) return;
         pullState(false);
       });
+      await window.__TAURI__.event.listen("update-progress", function (event) {
+        if (event && event.payload) {
+          ui.update.progress = event.payload;
+          renderHero();
+        }
+      });
+      await window.__TAURI__.event.listen("trigger-check-update", function () {
+        checkForUpdates(false);
+      });
     } catch (err) {
       /* The 2.5s fallback poll still keeps the UI fresh. */
     }
@@ -2394,6 +2646,9 @@
 
     subscribeStateEvents();
     pullState(true);
+    setTimeout(function () {
+      checkForUpdates(true);
+    }, 3000);
     setInterval(function () {
       if (document.visibilityState !== "visible") return;
       if (ui.busy || ui.picking || ui.installing) return;

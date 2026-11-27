@@ -1,0 +1,25 @@
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# DeskPort local state
+.orca-tasks/
+data/
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+src-tauri/icons/*.tmp
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp

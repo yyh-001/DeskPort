@@ -1,0 +1,47 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "DeskPort",
+  "version": "0.1.0",
+  "identifier": "io.github.yyh001.deskport",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "DeskPort",
+        "width": 820,
+        "height": 620,
+        "minWidth": 680,
+        "minHeight": 520,
+        "center": true,
+        "resizable": true,
+        "fullscreen": false,
+        "visible": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "DeveloperTool",
+    "shortDescription": "Local MCP bridge with OAuth 2.1 and tunnels",
+    "longDescription": "DeskPort turns your machine into an OAuth-protected MCP Streamable HTTP server for trusted AI clients, with workspace allow-listing, 11 file/shell tools and one-click Cloudflare/ngrok tunnels.",
+    "copyright": "Copyright © 2026 DeskPort Contributors",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    }
+  }
+}

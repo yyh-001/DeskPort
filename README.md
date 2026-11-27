@@ -26,6 +26,21 @@ through **11 file & shell tools** to the AI clients you trust — no Node.js run
 
 ---
 
+## 界面 · Screenshots
+
+| 工作区与白名单 | 隧道与接入 |
+| :---: | :---: |
+| [![工作区](docs/screenshots/workspaces.png)](docs/screenshots/workspaces.png) | [![隧道与接入](docs/screenshots/tunnel.png)](docs/screenshots/tunnel.png) |
+
+<details>
+<summary>深色主题</summary>
+
+![深色主题](docs/screenshots/workspaces-dark.png)
+
+</details>
+
+---
+
 ## 特性 · Features
 
 | | |

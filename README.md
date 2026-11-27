@@ -47,15 +47,25 @@ through **11 file & shell tools** to the AI clients you trust — no Node.js run
 > 最新版本 **v0.1.0 已发布**：Windows / macOS（Apple Silicon 与 Intel）/ Linux，共 9 个安装包。
 > 也可以直接用下面的源码构建。
 
-发版后从 [Releases](https://github.com/yyh-001/DeskPort/releases) 下载对应安装包：
+发版后从 [Releases](https://github.com/yyh-001/DeskPort/releases) 下载。两种形态都提供：
+
+**免安装版 · Portable**（推荐，解压即用，不写注册表、不建快捷方式）
+
+| 平台 | 文件 | 用法 |
+| :--- | :--- | :--- |
+| **Windows 10/11 (x64)** | `deskport_windows_x64.exe` | 双击直接运行（依赖系统自带 WebView2，Win10/11 一般已预装） |
+| **macOS** | `deskport_darwin_aarch64` / `deskport_darwin_x64` | `chmod +x` 后运行；首次打开需右键「打开」绕过 Gatekeeper |
+| **Linux (x64)** | `deskport_linux_x64` | `chmod +x` 后运行，需要系统已装 `webkit2gtk-4.1` 等运行库 |
+
+**安装包 · Installer**
 
 | 平台 | 产物 |
 | :--- | :--- |
 | **Windows 10/11 (x64)** | `.msi`（WiX）或 `.exe`（NSIS） |
 | **macOS 11+** | `.dmg`（Apple Silicon `aarch64` / Intel `x64`） |
-| **Linux (x64)** | `.AppImage` 或 `.deb` |
+| **Linux (x64)** | `.AppImage` / `.deb` / `.rpm` |
 
-> 首次打开 macOS 若提示未签名，可在「系统设置 → 隐私与安全性」中选择「仍要打开」。
+> 两者共用同一份数据目录，换成免安装版不会丢配置。macOS 若提示未签名，可在「系统设置 → 隐私与安全性」中选择「仍要打开」。
 
 ### 从源码构建
 
